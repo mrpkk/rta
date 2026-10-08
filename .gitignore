@@ -1,0 +1,7 @@
+node_modules/
+build/age_js/
+build/*.ptau
+build/age*.zkey
+build/verification_key.json
+build/*.r1cs
+build/*.sym
