@@ -11,3 +11,6 @@ build/pot12_*.ptau
 build/rta_final.zkey
 build/rta_vk.json
 build/ceremony-log.json
+build/*.zkey
+build/*_vk.json
+build/*_js/
