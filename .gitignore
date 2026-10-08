@@ -5,3 +5,9 @@ build/age*.zkey
 build/verification_key.json
 build/*.r1cs
 build/*.sym
+build/ceremony_*.ptau
+build/contrib*.ptau
+build/pot12_*.ptau
+build/rta_final.zkey
+build/rta_vk.json
+build/ceremony-log.json
