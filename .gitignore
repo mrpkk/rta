@@ -14,3 +14,6 @@ build/ceremony-log.json
 build/*.zkey
 build/*_vk.json
 build/*_js/
+__pycache__/
+*.pyc
+.pytest_cache/
