@@ -330,3 +330,41 @@ def test_x402_settled_receipt_reaches_the_client(monkeypatch):
     assert payload["payment"]["settled"] is True
     assert payload["payment"]["transaction"] == "0xdead"
     assert "X-Payment-Response" in headers
+
+
+def _post_with(url, payload, headers):
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", **headers},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.loads(r.read()), dict(r.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read()), dict(e.headers)
+
+
+@pytest.mark.parametrize("header_name", ["PAYMENT-SIGNATURE", "X-PAYMENT"])
+def test_both_x402_header_names_are_accepted(monkeypatch, header_name):
+    """Регрессия 09.10.2026. Сервис выставляет челлендж x402Version 2, а в
+    v2 спецификация называет заголовок оплаты PAYMENT-SIGNATURE. X-PAYMENT —
+    имя из v1. Читая только X-Payment, мы отвечали бы 402 настоящему
+    v2-клиенту вечно: он платит правильно, а мы его не слышим.
+    """
+    import rta.http_api as api
+    from rta.service import ServiceError
+
+    seen = []
+    monkeypatch.setattr(api, "settle_payment",
+                        lambda cfg, header, **k: (seen.append(header),
+                                                  (_ for _ in ()).throw(
+                                                      ServiceError("тест")))[1])
+
+    def body(base):
+        return _post_with(base + "/v1/verify", {"predicate": "balance-1000"},
+                          {header_name: "payload"})
+
+    code, payload, headers = _run(_x402_app(), body)
+    assert seen == ["payload"], (
+        f"{header_name}: расчёт не вызван, заголовок не прочитан")
+    assert "X-Payment" not in headers, f"{header_name}: выдан новый счёт"

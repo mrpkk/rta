@@ -233,7 +233,14 @@ class Handler(BaseHTTPRequestHandler):
                     # и выйти»: счёт выставлялся на ЛЮБОЙ запрос, и оплатить
                     # его через сам сервис было невозможно — заколдованный
                     # круг. Теперь: нет заголовка — счёт; есть — расчёт.
-                    header = self.headers.get("X-Payment")
+                    # Заголовок оплаты называется по-разному в версиях
+                    # спецификации: v2 — PAYMENT-SIGNATURE, v1 — X-PAYMENT.
+                    # Мы выставляем x402Version 2, поэтому клиент по v2
+                    # пришлёт первый, и читать только второй — значит не
+                    # слышать настоящего плательщика вовсе.
+                    header = (self.headers.get("PAYMENT-SIGNATURE")
+                              or self.headers.get("X-PAYMENT")
+                              or self.headers.get("X-Payment"))
                     if not header:
                         self._send(*self.app.payment_required(
                             self._resource_url()))
