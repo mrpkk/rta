@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,7 +31,8 @@ from pathlib import Path
 
 from .service import (Config, NonceStore, PREDICATES, RateLimiter,
                       ServiceError, build_payment_challenge, economics,
-                      verify_proof)
+                      settle_payment,
+                      verify_proof, verifying_key_path)
 
 _ATTEST = str(Path(__file__).resolve().parents[2] / "attest")
 if _ATTEST not in sys.path:
@@ -106,9 +108,11 @@ class App:
                          "error": f"nonce недействителен ({status}); каждое "
                                   f"доказательство проверяется один раз"}
 
+        # Ключ — по предикату. Раньше здесь стоял один build/vk.json на всех,
+        # а он является копией tx_count_50_vk.json: четыре схемы из пяти
+        # сверялись с чужим ключом и отвергали валидные доказательства.
         ok, why = verify_proof(predicate, proof, public,
-                               str(Path(__file__).resolve().parents[1]
-                                    / "build" / "vk.json"))
+                               str(verifying_key_path(predicate)))
         self.counts["verify"] += 1
         if ok:
             self.nonces.consume(nonce)
@@ -119,6 +123,29 @@ class App:
         self.counts["rejected"] += 1
         return 200, {"ok": False, "predicate": predicate, "verdict": why,
                      "disclosed": "проверка не прошла; секрет не раскрыт"}
+
+    def verify_paid(self, body: dict, resource_url: str,
+                    receipt: dict) -> tuple[int, dict, dict]:
+        """Проверить доказательство уже оплаченного запроса.
+
+        Отдельный метод, а не флаг у verify: платёж и проверка доказательства
+        — разные решения с разными последствиями. Здесь важно, чтобы квитанция
+        о расчёте уехала к клиенту вместе с вердиктом: без неё агент-покупатель
+        не сможет предъявить, что оплатил.
+        """
+        status, payload = self.verify(body, resource_url)
+        payload["payment"] = {"settled": True,
+                              "transaction": receipt.get("transaction"),
+                              "network": receipt.get("network"),
+                              "amount_atoms": receipt.get("amount_atoms"),
+                              "pay_to": receipt.get("pay_to")}
+        import base64 as _b64
+        import json as _json
+        resp = _b64.b64encode(_json.dumps(
+            {"success": True, "transaction": receipt.get("transaction"),
+             "network": receipt.get("network"),
+             "payer": receipt.get("payer")}).encode()).decode()
+        return status, payload, {"X-Payment-Response": resp}
 
     def payment_required(self, resource_url: str) -> tuple[int, dict, dict]:
         """Настоящий челлендж x402. Формат — из проверенного кода attest."""
@@ -202,7 +229,28 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(*self.app.issue_nonce(body))
             elif path == "/v1/verify":
                 if self.app.cfg.mode == "x402":
-                    self._send(*self.app.payment_required(self._resource_url()))
+                    # Оплата. Раньше здесь стояло безусловное «вернуть 402
+                    # и выйти»: счёт выставлялся на ЛЮБОЙ запрос, и оплатить
+                    # его через сам сервис было невозможно — заколдованный
+                    # круг. Теперь: нет заголовка — счёт; есть — расчёт.
+                    header = self.headers.get("X-Payment")
+                    if not header:
+                        self._send(*self.app.payment_required(
+                            self._resource_url()))
+                        return
+                    try:
+                        receipt = settle_payment(
+                            self.app.cfg, header, attestation_sys_path=_ATTEST)
+                    except ServiceError as exc:
+                        # Платы не состоялось — доказательство не выдаём,
+                        # но и не требуем оплату повторно вслепую: клиенту
+                        # нужна причина, а не второй счёт.
+                        self._send(402, {"ok": False, "error": str(exc),
+                                         "paid": False})
+                        return
+                    self._send(*self.app.verify_paid(body,
+                                                     self._resource_url(),
+                                                     receipt))
                     return
                 self._send(*self.app.verify(body, self._resource_url()))
             else:
@@ -230,3 +278,39 @@ def serve(host: str = "127.0.0.1", port: int = 8080) -> None:  # pragma: no cove
         print("\nостановлено")
     finally:
         srv.server_close()
+
+
+def main(argv: list[str] | None = None) -> int:  # pragma: no cover
+    """Точка входа `python -m rta.http_api`.
+
+    Её не было 09.10.2026, и это была худшая из возможных ошибок: модуль
+    без `if __name__ == "__main__"` при запуске выходил с кодом 0 и не
+    печатал ничего. Скрипт развёртывания видел успех, а порт не слушался
+    никто — сервис «поднимался» за секунду и сразу умирал, и найти это
+    можно было только попыткой обратиться к API.
+    """
+    import argparse
+    p = argparse.ArgumentParser(prog="python -m rta.http_api",
+                                description="ṚTA — HTTP-сервис ZK-доказательств")
+    p.add_argument("--host", default=os.getenv("RTA_HOST", "127.0.0.1"),
+                   help="адрес прослушивания (по умолчанию только localhost)")
+    p.add_argument("--port", type=int, default=int(os.getenv("RTA_PORT", "8080")),
+                   help="порт (по умолчанию 8080)")
+    a = p.parse_args(argv)
+
+    # Проверяем конфигурацию ДО старта: в режиме x402 без адреса получателя
+    # и цены сервис поднялся бы и на каждый запрос отвечал бы 500.
+    try:
+        cfg = Config.from_env()
+    except ServiceError as exc:
+        print(f"конфигурация не проходит проверку: {exc}", file=sys.stderr)
+        return 2
+    if cfg.mode == "x402":
+        print(f"режим x402: цена {cfg.price_atoms} атомов, получатель {cfg.pay_to}")
+
+    serve(host=a.host, port=a.port)
+    return 0
+
+
+if __name__ == "__main__":       # noqa: RUF100
+    raise SystemExit(main())

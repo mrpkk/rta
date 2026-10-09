@@ -159,7 +159,10 @@ def test_missing_key_is_a_rejection_not_a_pass():
 
 
 def test_verify_proof_returns_false_on_bad_input():
-    ok, why = verify_proof("age-18", {"protocol": "groth16"}, [],
+    # Предикат здесь — любой реально собираемый. Раньше стоял age-18,
+    # который убран 09.10.2026 как несобираемый: проверка не проходит
+    # не из-за мусора во входе, а потому что схемы нет.
+    ok, why = verify_proof("balance-1000", {"protocol": "groth16"}, [],
                            "/tmp/не-существует.json")
     assert ok is False and why
 
@@ -206,3 +209,108 @@ def test_price_below_cost_is_refused_by_the_shared_layer():
     with pytest.raises(ValueError):
         build_payment_challenge(cfg, "https://rta.example/prove",
                                 attestation_sys_path=_ATTEST)
+
+
+# ── КЛЮЧ ВЕРИФИКАЦИИ ДОЛЖЕН СООТВЕТСТВОВАТЬ ПРЕДИКАТУ (09.10.2026) ──
+#
+# Найдено на живой сессии: /v1/verify подставлял один и тот же файл
+# build/vk.json для любого предиката. Этот файл — побайтовая копия
+# tx_count_50_vk.json (одинаковый md5), то есть четыре схемы из пяти
+# проверялись по чужому ключу: валидное доказательство balance_1000
+# отвергалось, потому что сверялось не с тем ключом.
+
+def test_each_predicate_resolves_to_its_own_verifying_key():
+    """Ключ выбирается по предикату, а не один на все."""
+    from rta.service import verifying_key_path
+    seen = {}
+    for name in PREDICATES:
+        p = verifying_key_path(name)
+        seen.setdefault(p.read_bytes(), []).append(name)
+        assert p.exists(), f"{name}: нет ключа {p.name}"
+    # уникальный ключ на каждый предикат — главное утверждение
+    for key_bytes, names in seen.items():
+        assert len(names) == 1, f"ключ делят предикаты: {names}"
+
+
+def test_predicate_key_is_not_the_tx_count_key():
+    """Конкретная регрессия: нельзя возвращаться к одному vk.json."""
+    from rta.service import verifying_key_path
+    tx_key = verifying_key_path("tx-count-50").read_bytes()
+    for name in ("balance-1000", "balance-100000", "stake-10000",
+                 "account-age-180"):
+        assert verifying_key_path(name).read_bytes() != tx_key, (
+            f"{name} сверяется с ключом tx-count-50 — это исходный баг")
+
+
+def test_advertised_predicates_all_have_circuits():
+    """Объявленный предикат обязан быть собираемым. Раньше в списке висел
+    age-18: ни схемы в gen-circuits.mjs, ни скомпилированного ключа."""
+    from rta.service import verifying_key_path
+    for name in PREDICATES:
+        assert verifying_key_path(name).exists(), (
+            f"{name} объявлен в /v1/predicates, но ключа для него нет")
+
+
+def test_unknown_predicate_key_raises():
+    from rta.service import verifying_key_path
+    with pytest.raises(ValueError):
+        verifying_key_path("age-18")
+
+
+# ── x402: ОПЛАТА ДОЛЖНА ПРИНИМАТЬСЯ, А НЕ ТОЛЬКО ЗАПРАШИВАТЬСЯ (09.10.2026)
+#
+# До правки /v1/verify в режиме x402 на ЛЮБОЙ запрос отвечал 402 и больше
+# ничего не делал: ни подписи не проверял, ни расчёта не просил. Сервис
+# выдавал счёт, который невозможно было оплатить через него же.
+
+def test_config_carries_a_facilitator(monkeypatch):
+    monkeypatch.setenv("RTA_MODE", "x402")
+    monkeypatch.setenv("RTA_PRICE_ATOMS", "1000000")
+    monkeypatch.setenv("RTA_PAY_TO", "0x" + "a" * 40)
+    monkeypatch.delenv("RTA_FACILITATOR", raising=False)
+    from rta.service import Config as C
+    assert C.from_env().facilitator.startswith("https://")
+
+    monkeypatch.setenv("RTA_FACILITATOR", "https://facilitator.example")
+    assert C.from_env().facilitator == "https://facilitator.example"
+
+
+def test_settle_rejects_a_request_without_payment_header():
+    """Платежа нет — расчёт не выполняется и не должен выдаваться за успех."""
+    from rta.service import settle_payment
+    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40)
+    with pytest.raises(ServiceError):
+        settle_payment(cfg, header_value=None,
+                       attestation_sys_path=_ATTEST)
+
+
+def test_settle_never_calls_the_facilitator_for_a_bad_signature(monkeypatch):
+    """Подпись не сошлась — запрос к сети не уходит. Иначе сервер сам
+    станет орудием чужих транзакций: принимает мусор и просит перевод."""
+    from rta.service import settle_payment
+    import rta.service as svc
+
+    called = []
+    monkeypatch.setattr(svc, "_post_to_facilitator",
+                        lambda *a, **k: called.append(a) or {}, raising=False)
+
+    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40)
+    with pytest.raises(ServiceError):
+        settle_payment(cfg, header_value="not-a-real-payload",
+                       attestation_sys_path=_ATTEST)
+    assert not called, "сетевой запрос сделан ДО проверки подписи"
+
+
+def test_settle_requires_facilitator_to_report_success(monkeypatch):
+    """Ответ facilitator без success:true — это провал, а не «наверное ок».
+    Иначе сервер отдаёт доказательство бесплатно."""
+    from rta.service import settle_payment
+    import rta.service as svc
+
+    monkeypatch.setattr(svc, "verify_payment", lambda *a, **k: object(),
+                        raising=False)
+    monkeypatch.setattr(svc, "_post_to_facilitator",
+                        lambda *a, **k: {"transaction": "0xabc"}, raising=False)
+    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40)
+    with pytest.raises(ServiceError):
+        settle_payment(cfg, header_value="payload", attestation_sys_path=_ATTEST)

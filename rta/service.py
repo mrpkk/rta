@@ -32,10 +32,27 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 _NODE_DIR = _HERE.parent / "build"
 
+# Facilitator по умолчанию: публичный, спецификация x402. Поменять на
+# свой — RTA_FACILITATOR в окружении. Сервер шлёт сюда расчёт после
+# того, как подпись платежа сошлась локально.
+DEFAULT_FACILITATOR = "https://x402.org/facilitator"
+
+# USDC в Base mainnet. Константа, а не строка в коде вызова: адрес
+# токена — часть подписи, опечатка в нём подписала бы чужие деньги.
+USDC_ASSET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+DEFAULT_NETWORK = "eip155:8453"
+
 # Предикаты, которые сервис вообще готов проверять. Список закрытый:
 # клиент не может прислать имя схемы и получить проверку чего угодно.
+#
+# Имена через дефис — как в HTTP API, файлы схем через подчёркивание.
+# Связь между ними единственная: verifying_key_path ниже.
+#
+# age-18 убран 09.10.2026: он был объявлен в /v1/predicates, но схемы
+# age-18 в gen-circuits.mjs нет и скомпилированного ключа не было —
+# клиент выбирал его, платил и получал отказ. Объявлять предикат,
+# который нечем проверить, хуже, чем не объявлять его вовсе.
 PREDICATES: dict[str, dict] = {
-    "age-18": {"bits": 8, "threshold": 18, "label": "возраст >= 18"},
     "balance-1000": {"bits": 32, "threshold": 1000, "label": "баланс >= 1000"},
     "balance-100000": {"bits": 48, "threshold": 100000,
                        "label": "баланс >= 100000"},
@@ -64,6 +81,7 @@ class Config:
     pay_to: str = ""
     max_timeout_seconds: int = 300
     rate_limit_per_minute: int = 60
+    facilitator: str = DEFAULT_FACILITATOR
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -80,7 +98,9 @@ class Config:
             if not re.fullmatch(r"0x[a-fA-F0-9]{40}", pay_to):
                 raise ServiceError("RTA_MODE=x402 требует RTA_PAY_TO: "
                                    "адрес 0x… из 40 шестнадцатеричных знаков")
-        return cls(mode=mode, price_atoms=price, pay_to=pay_to)
+        return cls(mode=mode, price_atoms=price, pay_to=pay_to,
+                   facilitator=os.getenv("RTA_FACILITATOR",
+                                         DEFAULT_FACILITATOR))
 
 
 class NonceStore:
@@ -150,6 +170,26 @@ def _bits(value: int, n: int) -> list[int]:
     """Младшие n бит числа. Секрет разлагается у клиента, не здесь —
     функция нужна для тестов сервиса и для воспроизводимых примеров."""
     return [(value >> i) & 1 for i in range(n)]
+
+
+def verifying_key_path(predicate: str) -> Path:
+    """Путь к ключу верификации ИМЕННО ЭТОГО предиката.
+
+    Ключевая правка 09.10.2026. Раньше вызывающая сторона подставляла
+    один общий build/vk.json для любого предиката, а этот файл —
+    побайтовая копия tx_count_50_vk.json (совпадающий md5). Итог был
+    тихим: пять схем объявлялись, а проверить можно было только одну;
+    остальные четыре отвергали валидные доказательства, сверяя их
+    с чужим ключом.
+
+    Имя предиката в API через дефис, имя файла через подчёркивание.
+    Соответствие однозначное, и тест на уникальность ключа это
+    стережёт: общий ключ на два предиката тест не пропустит.
+    """
+    if predicate not in PREDICATES:
+        raise ServiceError(f"предикат {predicate!r} неизвестен; доступен: "
+                           f"{', '.join(sorted(PREDICATES))}")
+    return _NODE_DIR / f"{predicate.replace('-', '_')}_vk.json"
 
 
 def verify_proof(predicate: str, proof: dict, public_signals: list,
@@ -242,3 +282,104 @@ def economics(attestation_sys_path: str | None = None) -> dict:
         "min_price_atoms": int(min_price * 1_000_000) + 1,
         "margin_multiplier": MIN_MARGIN_MULTIPLIER,
     }
+
+
+# ------------------------------------------------------- приём оплаты
+
+def _post_to_facilitator(url: str, payload: dict, timeout: int = 30) -> dict:
+    """POST к facilitator/settle. Вынесено отдельно, чтобы тесты могли
+    подменить сеть и доказать, что до проверки подписи она не вызывается."""
+    import urllib.request
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def settle_payment(cfg: Config, header_value: str | None, *,
+                   attestation_sys_path: str | None = None,
+                   seen_nonces: set | None = None) -> dict:
+    """Принять оплату по x402: проверить подпись, затем провести расчёт.
+
+    До 09.10.2026 этого не было вовсе — /v1/verify в режиме x402 на любой
+    запрос отвечал 402 и больше ничего не делал. Счёт выставлялся, но
+    оплатить его через сам сервис было невозможно.
+
+    Порядок жёсткий и он весь про одну мысль: **сначала криптография,
+    потом сеть.** Проверка подписи платежа идёт до сетевого запроса,
+    потому что иначе сервер отправлял бы в сеть всё, что прислали, —
+    то есть был бы чужим транспортом для чужих транзакций.
+
+    Ответ facilitator без `success: true` считается провалом: доказательство
+    выдавать нельзя, если расчёт не подтверждён.
+    """
+    if not header_value:
+        raise ServiceError("платёж не предъявлен: заголовок X-Payment пуст")
+
+    import sys as _sys
+    if attestation_sys_path and attestation_sys_path not in _sys.path:
+        _sys.path.insert(0, attestation_sys_path)
+    from attest.payment import (PaymentRequirement,  # noqa: PLC0415
+                                verify_payment as _verify_payment)
+    from attest.service import EIP712Domain          # noqa: PLC0415
+
+    import base64                                    # noqa: PLC0415
+    try:
+        body = json.loads(base64.b64decode(header_value))
+    except Exception as exc:                         # noqa: BLE001
+        raise ServiceError(f"X-Payment не разобран: {exc}") from exc
+
+    requirement = PaymentRequirement(
+        network=str(body.get("network") or os.getenv("RTA_NETWORK",
+                                                 DEFAULT_NETWORK)),          # Base mainnet
+        pay_to=cfg.pay_to,
+        amount_atoms=cfg.price_atoms,
+        asset=str(body.get("asset") or USDC_ASSET),
+        version=2,
+        resource=str(body.get("resource") or ""),
+    )
+    domain = EIP712Domain(
+        name="USDC", version="2",
+        verifying_contract=requirement.asset,
+        chain_id=int(requirement.network.split(":")[-1]),
+    )
+
+    # 1. Подпись. Только локальная криптография, никаких обращений наружу.
+    try:
+        payment = _verify_payment(requirement, header_value, domain,
+                                  seen_nonces=seen_nonces,
+                                  max_window_seconds=cfg.max_timeout_seconds)
+    except Exception as exc:                         # noqa: BLE001
+        raise ServiceError(f"платёж не прошёл проверку: {exc}") from exc
+
+    # 2. Расчёт у facilitator. Сеть трогается только теперь.
+    url = cfg.facilitator.rstrip("/") + "/settle"
+    try:
+        result = _post_to_facilitator(url, {
+            "paymentPayload": body,
+            "paymentRequirements": {
+                "scheme": "exact", "network": requirement.network,
+                "maxAmountRequired": str(requirement.amount_atoms),
+                "resource": requirement.resource,
+                "description": "Zk proof verification",
+                "mimeType": "application/json",
+                "payTo": requirement.pay_to,
+                "maxTimeoutSeconds": cfg.max_timeout_seconds,
+                "asset": requirement.asset,
+            },
+        })
+    except Exception as exc:                         # noqa: BLE001
+        raise ServiceError(f"расчёт у facilitator не выполнен: {exc}") from exc
+
+    if not (isinstance(result, dict) and result.get("success") is True):
+        reason = (result or {}).get("error") or "без поля success"
+        raise ServiceError(f"facilitator не подтвердил расчёт: {reason}")
+
+    return {"transaction": result.get("transaction"),
+            "network": result.get("network", requirement.network),
+            "payer": result.get("payer"),
+            "settled": True,
+            "amount_atoms": requirement.amount_atoms,
+            "pay_to": requirement.pay_to,
+            "nonce": getattr(payment, "nonce", None)}
