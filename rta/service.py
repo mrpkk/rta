@@ -42,6 +42,34 @@ DEFAULT_FACILITATOR = "https://x402.org/facilitator"
 USDC_ASSET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 DEFAULT_NETWORK = "eip155:8453"
 
+# Base Sepolia — тестнет. Нужен, чтобы проверить ВЕСЬ платёжный путь
+# бесплатно: публичный facilitator mainnet не держит (проверено:
+# x402.org/facilitator/supported — все 9 сетей тестнеты), поэтому сначала
+# testnet, и только потом решение про деньги.
+#
+# Контракт USDC в Sepolia ДРУГОЙ. Перепутать — значит подписать перевод
+# по несуществующему адресу: подпись сойдётся, деньги уйдут в никуда.
+USDC_ASSET_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+NETWORK_SEPOLIA = "eip155:84532"
+
+#: сеть → контракт USDC. Адрес токена часть подписи, поэтому он
+#: выбирается по сети, а не задаётся независимо.
+USDC_BY_NETWORK: dict[str, str] = {
+    DEFAULT_NETWORK: USDC_ASSET,
+    NETWORK_SEPOLIA: USDC_ASSET_SEPOLIA,
+}
+
+
+def usdc_for(network: str) -> str:
+    """Контракт USDC указанной сети. Неизвестная сеть — отказ, а не
+    молчаливый переход на mainnet: подпись на чужой сети хуже ошибки."""
+    try:
+        return USDC_BY_NETWORK[network]
+    except KeyError:
+        raise ServiceError(
+            f"сеть {network!r} неизвестна; поддерживаются: "
+            f"{', '.join(sorted(USDC_BY_NETWORK))}") from None
+
 # Предикаты, которые сервис вообще готов проверять. Список закрытый:
 # клиент не может прислать имя схемы и получить проверку чего угодно.
 #
@@ -82,6 +110,7 @@ class Config:
     max_timeout_seconds: int = 300
     rate_limit_per_minute: int = 60
     facilitator: str = DEFAULT_FACILITATOR
+    network: str = DEFAULT_NETWORK
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -91,6 +120,8 @@ class Config:
                                f"получено {mode!r}")
         price = int(os.getenv("RTA_PRICE_ATOMS", "0"))
         pay_to = os.getenv("RTA_PAY_TO", "")
+        network = os.getenv("RTA_NETWORK", DEFAULT_NETWORK)
+        usdc_for(network)          # отказ сразу, если сеть неизвестна
         if mode == "x402":
             if price <= 0:
                 raise ServiceError("RTA_MODE=x402 требует RTA_PRICE_ATOMS > 0")
@@ -99,6 +130,7 @@ class Config:
                 raise ServiceError("RTA_MODE=x402 требует RTA_PAY_TO: "
                                    "адрес 0x… из 40 шестнадцатеричных знаков")
         return cls(mode=mode, price_atoms=price, pay_to=pay_to,
+                   network=network,
                    facilitator=os.getenv("RTA_FACILITATOR",
                                          DEFAULT_FACILITATOR))
 
@@ -258,6 +290,12 @@ def build_payment_challenge(cfg: Config, resource_url: str, *,
         max_timeout_seconds=cfg.max_timeout_seconds,
         service_name="rta",
         tags=["zk", "proof", "privacy", "compliance"],
+        # Сеть и контракт токена — обязательными аргументами, а не
+        # умолчаниями. Раньше они не передавались вовсе, и сервер,
+        # запущенный на Sepolia, выставлял счёт в mainnet USDC: подпись
+        # сошлась бы, деньги ушли бы не туда, и ошибки не было бы видно.
+        network=cfg.network,
+        asset=usdc_for(cfg.network),
     )
     return header, body
 
@@ -331,11 +369,13 @@ def settle_payment(cfg: Config, header_value: str | None, *,
         raise ServiceError(f"X-Payment не разобран: {exc}") from exc
 
     requirement = PaymentRequirement(
-        network=str(body.get("network") or os.getenv("RTA_NETWORK",
-                                                 DEFAULT_NETWORK)),          # Base mainnet
+        network=str(body.get("network") or cfg.network),          # Base mainnet
         pay_to=cfg.pay_to,
         amount_atoms=cfg.price_atoms,
-        asset=str(body.get("asset") or USDC_ASSET),
+        # Контракт токена — по сети, и по сети СЕРВЕРА, а не по тому, что
+        # прислал клиент: иначе плательщик подписывал бы перевод по адресу
+        # другого токена, а подпись всё равно сошлась бы.
+        asset=str(body.get("asset") or usdc_for(cfg.network)),
         version=2,
         resource=str(body.get("resource") or ""),
     )

@@ -150,10 +150,16 @@ class App:
     def payment_required(self, resource_url: str) -> tuple[int, dict, dict]:
         """Настоящий челлендж x402. Формат — из проверенного кода attest."""
         e = economics(_ATTEST)
-        cfg = Config(mode="x402",
-                     price_atoms=max(self.cfg.price_atoms, e["min_price_atoms"]),
-                     pay_to=self.cfg.pay_to,
-                     max_timeout_seconds=self.cfg.max_timeout_seconds)
+        # dataclasses.replace, а не перечисление полей: здесь раньше стоял
+        # Config(...) с пятью полями, и сеть с facilitator молча терялись —
+        # сервер, запущенный на Sepolia, выставлял счёт в mainnet.
+        # Ошибка невидима: подпись сходилась бы, деньги ушли бы не туда.
+        import dataclasses
+        cfg = dataclasses.replace(
+            self.cfg,
+            mode="x402",
+            price_atoms=max(self.cfg.price_atoms, e["min_price_atoms"]),
+        )
         header, challenge = build_payment_challenge(
             cfg, resource_url, attestation_sys_path=_ATTEST)
         return 402, challenge, {"X-Payment": header,

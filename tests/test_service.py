@@ -314,3 +314,46 @@ def test_settle_requires_facilitator_to_report_success(monkeypatch):
     cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40)
     with pytest.raises(ServiceError):
         settle_payment(cfg, header_value="payload", attestation_sys_path=_ATTEST)
+
+
+# ── СЕТЬ И КОНТРАКТ ТОКЕНА (09.10.2026) ──
+#
+# Mainnet и testnet — это РАЗНЫЕ токены по разным адресам. Перепутать —
+# значит подписать перевод по несуществующему контракту: подпись сойдётся,
+# деньги уйдут в никуда.
+
+def test_sepolia_and_mainnet_use_different_usdc():
+    from rta.service import usdc_for, DEFAULT_NETWORK, NETWORK_SEPOLIA
+    main = usdc_for(DEFAULT_NETWORK)
+    sep = usdc_for(NETWORK_SEPOLIA)
+    assert main != sep, "контракт USDC одинаковый в mainnet и Sepolia"
+    assert main == "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    assert sep == "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+
+
+def test_unknown_network_is_refused_not_defaulted():
+    """Молчаливый переход на mainnet при опечатке в сети хуже отказа:
+    сервис стал бы выставлять счёт не в той сети."""
+    from rta.service import usdc_for
+    with pytest.raises(ServiceError):
+        usdc_for("eip155:9999")
+
+
+def test_env_selects_sepolia(monkeypatch):
+    monkeypatch.setenv("RTA_MODE", "x402")
+    monkeypatch.setenv("RTA_PRICE_ATOMS", "1000")
+    monkeypatch.setenv("RTA_PAY_TO", "0x" + "a" * 40)
+    monkeypatch.setenv("RTA_NETWORK", "eip155:84532")
+    from rta.service import Config as C
+    cfg = C.from_env()
+    assert cfg.network == "eip155:84532"
+
+
+def test_env_refuses_unknown_network_before_starting(monkeypatch):
+    monkeypatch.setenv("RTA_MODE", "x402")
+    monkeypatch.setenv("RTA_PRICE_ATOMS", "1000")
+    monkeypatch.setenv("RTA_PAY_TO", "0x" + "a" * 40)
+    monkeypatch.setenv("RTA_NETWORK", "eip155:1")     # Ethereum mainnet
+    from rta.service import Config as C
+    with pytest.raises(ServiceError):
+        C.from_env()
