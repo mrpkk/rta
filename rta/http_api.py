@@ -220,8 +220,23 @@ class Handler(BaseHTTPRequestHandler):
         return data
 
     def _resource_url(self) -> str:
+        """Адрес ресурса для челленджа — ровно тот, по которому пришёл клиент.
+
+        Схему берём из X-Forwarded-Proto: за туннелем сервер всегда был бы
+        http, даже когда клиент пришёл по HTTPS, и покупатель увидел бы в
+        счёте не тот адрес, которым пользуется. Несоответствие адреса в
+        челлендже и в фактическом запросе — это расхождение, которое
+        клиент не обязан прощать.
+
+        Заголовок подделывает кто угодно, поэтому при отсутствии
+        X-Forwarded-Proto считаем соединение https: сервис наружу
+        выставляется только через туннель с TLS.
+        """
         host = self.headers.get("Host", "localhost:8080")
-        return f"http://{host}/v1/verify"
+        proto = (self.headers.get("X-Forwarded-Proto") or "https").strip().lower()
+        if proto not in ("http", "https"):
+            proto = "https"
+        return f"{proto}://{host}/v1/verify"
 
     def do_GET(self) -> None:                # noqa: N802
         path = self.path.split("?")[0].rstrip("/") or "/"

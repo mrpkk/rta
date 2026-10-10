@@ -334,6 +334,17 @@ def test_x402_settled_receipt_reaches_the_client(monkeypatch):
     assert "X-Payment-Response" in headers
 
 
+def _ci(headers, name):
+    """Найти заголовок без учёта регистра — как это делает urllib.
+
+    Cloudflare отдаёт X-PAYMENT как x-payment, и клиент, полагающийся на
+    точный регистр, не найдёт челлендж. Наш собственный клиент на этом
+    и споткнулся, поэтому проверка не искусственная.
+    """
+    low = {k.lower(): v for k, v in headers.items()}
+    return low.get(name.lower())
+
+
 def _post_with(url, payload, headers):
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
@@ -419,3 +430,48 @@ def test_replayed_nonce_is_refused_before_any_network_call(monkeypatch):
     assert code == 409, f"повтор должен отвергаться 409, получено {code}"
     assert payload.get("paid") is False
     del real_settle
+
+
+def test_resource_url_is_https_behind_a_tunnel():
+    """Схема берётся из X-Forwarded-Proto, а не жёстко http.
+
+    За туннелем сервер не знает, по какому протоколу пришёл запрос: он
+    всегда был бы http, даже когда клиент пришёл по HTTPS. Челлендж
+    объявлял бы ресурс как http:// при живом HTTPS-сайте — покупатель
+    видит в счёте не тот адрес, которым пользуется.
+    """
+    import base64
+    import rta.http_api as api
+
+    app = api.App(Config(mode="x402", price_atoms=1000000,
+                         pay_to="0x" + "a" * 40))
+    srv = api.create_server(app, host="127.0.0.1", port=0)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(
+            base + "/v1/verify",
+            data=json.dumps({"predicate": "balance-1000"}).encode(),
+            headers={"Content-Type": "application/json",
+                     "X-Forwarded-Proto": "https"},
+            method="POST")
+        raw = ""
+        try:
+            urllib.request.urlopen(req, timeout=30)
+        except urllib.error.HTTPError as e:
+            raw = e.headers.get("x-payment") or ""
+        assert raw, "нет заголовка с челленджем"
+        chal = json.loads(base64.b64decode(raw + "=" * (-len(raw) % 4)))
+        assert chal["resource"]["url"].startswith("https://"), (
+            f"челлендж объявил {chal['resource']['url']}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+def test_header_lookup_is_case_insensitive():
+    """Клиентские библиотеки читают заголовки без учёта регистра.
+    Регистр в разных реализациях Cloudflare отличается."""
+    raw = "eyJ4NDAyVmVyc2lvbiI6Mn0="
+    assert _ci({"x-payment": raw}, "X-Payment") == raw
+    assert _ci({"X-PAYMENT": raw}, "x-payment") == raw
+    assert _ci({"x-payment": raw}, "отсутствует") is None
