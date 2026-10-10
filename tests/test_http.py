@@ -298,8 +298,10 @@ def test_x402_with_paid_header_does_not_ask_again(monkeypatch):
     monkeypatch.setattr(api, "settle_payment", boom)
 
     def body(base):
+        _, nb, _ = post(base + "/v1/nonce", {"predicate": "balance-1000"})
         return _post_with_payment(base + "/v1/verify",
-                                  {"predicate": "balance-1000"}, "payload")
+                                  {"predicate": "balance-1000",
+                                   "nonce": nb["nonce"]}, "payload")
 
     code, payload, headers = _run(_x402_app(), body)
     assert calls, "расчёт не вызывался — маршрут всё ещё отвечает счётом"
@@ -361,10 +363,59 @@ def test_both_x402_header_names_are_accepted(monkeypatch, header_name):
                                                       ServiceError("тест")))[1])
 
     def body(base):
-        return _post_with(base + "/v1/verify", {"predicate": "balance-1000"},
+        _, nb, _ = post(base + "/v1/nonce", {"predicate": "balance-1000"})
+        return _post_with(base + "/v1/verify",
+                          {"predicate": "balance-1000", "nonce": nb["nonce"]},
                           {header_name: "payload"})
 
     code, payload, headers = _run(_x402_app(), body)
     assert seen == ["payload"], (
         f"{header_name}: расчёт не вызван, заголовок не прочитан")
     assert "X-Payment" not in headers, f"{header_name}: выдан новый счёт"
+
+
+def test_replayed_nonce_is_refused_before_any_network_call(monkeypatch):
+    """Nonce проверяется ДО расчёта, а не после.
+
+    Порядок в маршруте был: settle -> verify, а проверка nonce жила внутри
+    verify. То есть на заведомо повторном платеже сервер сначала
+    обращался к фасилитатору и лишь потом отказывал. Повтор ловил
+    фасилитатор, и ловил верно, но это лишний сетевой вызов и лишний
+    расчёт на его стороне.
+
+    Первое предъявление обязано дойти до расчёта — иначе nonce не
+    погаснет и «повтора» просто не случится. Повтор отсекается локально.
+    """
+    import rta.http_api as api
+
+    calls = []
+    real_settle = api.settle_payment
+
+    def counting(cfg, header, **kw):
+        calls.append(header)
+        return {"settled": True, "transaction": "0xdead",
+                "network": "eip155:84532", "amount_atoms": cfg.price_atoms,
+                "pay_to": cfg.pay_to, "payer": "0x" + "b" * 40}
+
+    monkeypatch.setattr(api, "settle_payment", counting)
+    # Доказательство подменяем, чтобы первое предъявление УСПЕЛО и погасило
+    # nonce. С мусорным доказательством nonce по замыслу не гасится —
+    # покупатель вправе повторить с настоящим, — и «повтора» не выходит.
+    monkeypatch.setattr(api, "verify_proof",
+                        lambda *a, **k: (True, "VERIFIED"))
+
+    def body(base):
+        _, nb, _ = post(base + "/v1/nonce", {"predicate": "balance-1000"})
+        payload = {"predicate": "balance-1000",
+                   "proof": {"protocol": "groth16"}, "public_signals": [],
+                   "nonce": nb["nonce"]}
+        first = _post_with_payment(base + "/v1/verify", payload, "payload")
+        assert first[0] == 200, f"первое предъявление отвергнуто: {first[1]}"
+        assert len(calls) == 1, "первое предъявление должно дойти до расчёта"
+        return _post_with_payment(base + "/v1/verify", payload, "payload")
+
+    code, payload, _ = _run(_x402_app(), body)
+    assert len(calls) == 1, f"расчёт вызван повторно: {len(calls)} раз"
+    assert code == 409, f"повтор должен отвергаться 409, получено {code}"
+    assert payload.get("paid") is False
+    del real_settle

@@ -124,6 +124,24 @@ class App:
         return 200, {"ok": False, "predicate": predicate, "verdict": why,
                      "disclosed": "проверка не прошла; секрет не раскрыт"}
 
+    def nonce_problem(self, nonce) -> str | None:
+        """Одноразовость. None — можно проверять дальше.
+
+        Вынесено отдельно от verify, потому что проверка обязана стоять
+        ДО расчёта у фасилитатора. Раньше она жила внутри verify, а маршрут
+        шёл settle → verify, и на повторном платеже сервер сначала
+        обращался к фасилитатору, и лишь потом отказывал. Ловил его
+        фасилитатор, и ловил верно, но это лишний сетевой вызов на
+        заведомо отвергаемый запрос.
+
+        Дёшево, локально и до сети: повтор должен отсекаться у нас.
+        """
+        status = self.nonces.status(nonce) if nonce else "unknown"
+        if status != "issued":
+            return (f"nonce недействителен ({status}); каждое доказательство "
+                    f"проверяется один раз")
+        return None
+
     def verify_paid(self, body: dict, resource_url: str,
                     receipt: dict) -> tuple[int, dict, dict]:
         """Проверить доказательство уже оплаченного запроса.
@@ -250,6 +268,14 @@ class Handler(BaseHTTPRequestHandler):
                     if not header:
                         self._send(*self.app.payment_required(
                             self._resource_url()))
+                        return
+                    # Повтор отсекаем здесь, до фасилитатора: сеть на
+                    # заведомо отвергаемый запрос не тратится.
+                    stale = self.app.nonce_problem(body.get("nonce"))
+                    if stale is not None:
+                        self.app.counts["rejected"] += 1
+                        self._send(409, {"ok": False, "error": stale,
+                                         "paid": False})
                         return
                     try:
                         receipt = settle_payment(
