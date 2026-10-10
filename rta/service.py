@@ -37,6 +37,12 @@ _NODE_DIR = _HERE.parent / "build"
 # того, как подпись платежа сошлась локально.
 DEFAULT_FACILITATOR = "https://x402.org/facilitator"
 
+#: Фасилитатор стоит за CDN, который банит запросы без внятного
+#: User-Agent (Cloudflare error 1010). Проверено 09.10.2026: с
+#: заголовком ответ 200, без него — 403. Наш собственный адрес честнее
+#: строки "Mozilla/…", и CDN его принимает.
+USER_AGENT = "rta/0.1 (+https://github.com/mrpkk/rta)"
+
 # USDC в Base mainnet. Константа, а не строка в коде вызова: адрес
 # токена — часть подписи, опечатка в нём подписала бы чужие деньги.
 USDC_ASSET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
@@ -327,12 +333,23 @@ def economics(attestation_sys_path: str | None = None) -> dict:
 def _post_to_facilitator(url: str, payload: dict, timeout: int = 30) -> dict:
     """POST к facilitator/settle. Вынесено отдельно, чтобы тесты могли
     подменить сеть и доказать, что до проверки подписи она не вызывается."""
+    import urllib.error
     import urllib.request
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
+        headers={"Content-Type": "application/json",
+                 "User-Agent": USER_AGENT},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as exc:
+        # Тело ответа обязано попасть в сообщение. Раньше его теряли, и
+        # отказ facilitator выглядел как «HTTP Error 403» без причины —
+        # а причиной был то Cloudflare, то отсутствие домена подписи.
+        detail = exc.read()[:300].decode("utf-8", "replace").strip()
+        raise ServiceError(
+            f"facilitator ответил {exc.code}: {detail or 'без тела'}") from exc
 
 
 def settle_payment(cfg: Config, header_value: str | None, *,
@@ -400,6 +417,10 @@ def settle_payment(cfg: Config, header_value: str | None, *,
             "paymentPayload": body,
             "paymentRequirements": {
                 "scheme": "exact", "network": requirement.network,
+                # И amount, и maxAmountRequired обязательны. Без amount
+                # фасилитатор отвечает 500 "Cannot convert undefined to a
+                # BigInt" — проверено на Base Sepolia 09.10.2026.
+                "amount": str(requirement.amount_atoms),
                 "maxAmountRequired": str(requirement.amount_atoms),
                 "resource": requirement.resource,
                 "description": "Zk proof verification",
@@ -407,14 +428,26 @@ def settle_payment(cfg: Config, header_value: str | None, *,
                 "payTo": requirement.pay_to,
                 "maxTimeoutSeconds": cfg.max_timeout_seconds,
                 "asset": requirement.asset,
+                # Имя и версия токена нужны фасилитатору, чтобы собрать
+                # домен EIP-712. Без них он отвечает
+                # invalid_exact_evm_missing_eip712_domain — проверял на
+                # Base Sepolia 09.10.2026.
+                "extra": {"name": domain.name, "version": domain.version},
             },
         })
     except Exception as exc:                         # noqa: BLE001
         raise ServiceError(f"расчёт у facilitator не выполнен: {exc}") from exc
 
     if not (isinstance(result, dict) and result.get("success") is True):
-        reason = (result or {}).get("error") or "без поля success"
-        raise ServiceError(f"facilitator не подтвердил расчёт: {reason}")
+        # Причину берём из всех полей, которыми facilitator её называет:
+        # у него это errorReason и errorMessage, а не error. Раньше искали
+        # только `error`, и отладочный вывод не говорил ничего — пришлось
+        # догадываться по HTTP-коду.
+        why = result if isinstance(result, dict) else {}
+        reason = (why.get("errorReason") or why.get("errorMessage")
+                  or why.get("error") or "без указания причины")
+        raise ServiceError(
+            f"facilitator не подтвердил расчёт: {reason}")
 
     return {"transaction": result.get("transaction"),
             "network": result.get("network", requirement.network),
