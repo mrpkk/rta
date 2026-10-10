@@ -17,3 +17,6 @@ build/*_js/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Конфигурация сервиса
+.env
