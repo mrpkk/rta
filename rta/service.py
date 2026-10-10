@@ -117,6 +117,8 @@ class Config:
     rate_limit_per_minute: int = 60
     facilitator: str = DEFAULT_FACILITATOR
     network: str = DEFAULT_NETWORK
+    rpc_url: str = ""
+    confirm_timeout_seconds: int = 3
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -138,7 +140,8 @@ class Config:
         return cls(mode=mode, price_atoms=price, pay_to=pay_to,
                    network=network,
                    facilitator=os.getenv("RTA_FACILITATOR",
-                                         DEFAULT_FACILITATOR))
+                                         DEFAULT_FACILITATOR),
+                   rpc_url=os.getenv("RTA_RPC_URL", ""))
 
 
 class NonceStore:
@@ -352,6 +355,33 @@ def _post_to_facilitator(url: str, payload: dict, timeout: int = 30) -> dict:
             f"facilitator ответил {exc.code}: {detail or 'без тела'}") from exc
 
 
+def _transaction_seen(rpc_url: str, tx_hash: str, timeout: int = 12) -> bool:
+    """Есть ли транзакция в сети.
+
+    Пустой ответ eth_getTransactionByHash означает, что транзакции нет:
+    либо не отправлена, либо ещё не разошлась по узлам. Для нас важно
+    только первое — деньги не перемещены.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+    if not rpc_url or not tx_hash:
+        return False
+    req = urllib.request.Request(
+        rpc_url,
+        data=_json.dumps({"jsonrpc": "2.0", "id": 1,
+                          "method": "eth_getTransactionByHash",
+                          "params": [tx_hash]}).encode(),
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = _json.loads(r.read())
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    return bool(body.get("result"))
+
+
 def settle_payment(cfg: Config, header_value: str | None, *,
                    attestation_sys_path: str | None = None,
                    seen_nonces: set | None = None) -> dict:
@@ -449,7 +479,31 @@ def settle_payment(cfg: Config, header_value: str | None, *,
         raise ServiceError(
             f"facilitator не подтвердил расчёт: {reason}")
 
-    return {"transaction": result.get("transaction"),
+    # Фасилитатор один раз ответил success без транзакции на самом деле.
+    # Ответ «оплачено» без транзакции — это бесплатная услуга, поэтому
+    # при возможности проверяем по сети и отказываем, если её нет.
+    #
+    # Повтор нужен потому, что фасилитатор может ответить раньше, чем
+    # транзакция разойдётся по узлам. Без повтора проверка давала бы
+    # ложные отказы на нормальных платежах.
+    tx_hash = str(result.get("transaction") or "")
+    confirmed = False
+    if tx_hash and cfg.rpc_url:
+        import time as _time
+        for attempt in range(3):
+            if _transaction_seen(cfg.rpc_url, tx_hash):
+                confirmed = True
+                break
+            if attempt < 2:
+                _time.sleep(cfg.confirm_timeout_seconds)
+        if not confirmed:
+            raise ServiceError(
+                f"фасилитатор отрапортовал успех, но транзакции {tx_hash} "
+                f"в сети нет. Оплата не засчитана — доказательство не "
+                f"выдаётся. Повторить с новым nonce.")
+
+    return {"transaction": tx_hash or None,
+            "confirmed_on_chain": confirmed,
             "network": result.get("network", requirement.network),
             "payer": result.get("payer"),
             "settled": True,

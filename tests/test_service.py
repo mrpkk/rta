@@ -20,6 +20,7 @@ if _ATTEST not in sys.path:
     sys.path.insert(0, _ATTEST)
 
 from rta.service import (Config, NonceStore, PREDICATES, RateLimiter,  # noqa: E402
+                        settle_payment,  # noqa: E402
                          ServiceError, economics, verify_proof)
 
 
@@ -278,7 +279,8 @@ def test_config_carries_a_facilitator(monkeypatch):
 def test_settle_rejects_a_request_without_payment_header():
     """Платежа нет — расчёт не выполняется и не должен выдаваться за успех."""
     from rta.service import settle_payment
-    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40)
+    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40,
+                 network="eip155:84532")   # сеть должна совпадать с заголовком
     with pytest.raises(ServiceError):
         settle_payment(cfg, header_value=None,
                        attestation_sys_path=_ATTEST)
@@ -294,7 +296,8 @@ def test_settle_never_calls_the_facilitator_for_a_bad_signature(monkeypatch):
     monkeypatch.setattr(svc, "_post_to_facilitator",
                         lambda *a, **k: called.append(a) or {}, raising=False)
 
-    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40)
+    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40,
+                 network="eip155:84532")   # сеть должна совпадать с заголовком
     with pytest.raises(ServiceError):
         settle_payment(cfg, header_value="not-a-real-payload",
                        attestation_sys_path=_ATTEST)
@@ -307,13 +310,20 @@ def test_settle_requires_facilitator_to_report_success(monkeypatch):
     from rta.service import settle_payment
     import rta.service as svc
 
-    monkeypatch.setattr(svc, "verify_payment", lambda *a, **k: object(),
+    # Патчится attest.payment, а НЕ rta.service.verify_payment:
+    # settle_payment делает `from attest.payment import verify_payment`
+    # внутри функции, и локальный импорт перекрывает атрибут модуля.
+    # Патч по svc.verify_payment не действовал — и тест был зелёным,
+    # потому что падал по другой причине.
+    import attest.payment as _ap
+    monkeypatch.setattr(_ap, "verify_payment", lambda *a, **k: object(),
                         raising=False)
     monkeypatch.setattr(svc, "_post_to_facilitator",
                         lambda *a, **k: {"transaction": "0xabc"}, raising=False)
-    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40)
+    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40,
+                 network="eip155:84532")   # сеть должна совпадать с заголовком
     with pytest.raises(ServiceError):
-        settle_payment(cfg, header_value="payload", attestation_sys_path=_ATTEST)
+        settle_payment(cfg, header_value=_fake_payment_header(), attestation_sys_path=_ATTEST)
 
 
 # ── СЕТЬ И КОНТРАКТ ТОКЕНА (09.10.2026) ──
@@ -357,3 +367,111 @@ def test_env_refuses_unknown_network_before_starting(monkeypatch):
     from rta.service import Config as C
     with pytest.raises(ServiceError):
         C.from_env()
+
+
+def _fake_payment_header() -> str:
+    """Валидный по форме заголовок оплаты.
+
+    Раньше тесты подставляли строку "payload", которая не разбирается как
+    base64 — и проходили не по той причине: settle_payment падал на
+    разборе, до обращения к фасилитатору. Тест, зелёный по не той причине,
+    хуже отсутствия теста.
+    """
+    import base64
+    import json as _json
+    body = {"x402Version": 2,
+            "accepted": {"scheme": "exact", "network": "eip155:84532",
+                         "maxAmountRequired": "1000000", "payTo": "0x" + "a" * 40,
+                         "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                         "extra": {"name": "USDC", "version": "2"}},
+            "payload": {"signature": "0x" + "11" * 65,
+                        "authorization": {"from": "0x" + "9c" * 20,
+                                          "to": "0x" + "a" * 40,
+                                          "value": "1000000", "validAfter": "0",
+                                          "validBefore": "9999999999",
+                                          "nonce": "0x" + "4d" * 32}}}
+    return base64.b64encode(_json.dumps(body).encode()).decode()
+
+
+# ── УСПОРТ ФАСИЛИТАТОРА НЕ РАВЕН ДЕНЬГАМ (09.10.2026) ──
+#
+# На живой сессии фасилитатор один раз ответил success: true с хешем
+# транзакции, которой в блокчейне не оказалось, и баланс не изменился.
+# Прежний код на это отвечал «оплачено» и выдавал доказательство — то
+# же самое, что бесплатная услуга. Проверка успеха теперь включает сеть.
+
+def test_settlement_requires_the_transaction_to_exist_on_chain(monkeypatch):
+    """Хеш есть, а транзакции в сети нет — оплаты не было."""
+    import rta.service as svc
+
+    # Патчится attest.payment, а НЕ rta.service.verify_payment:
+    # settle_payment делает `from attest.payment import verify_payment`
+    # внутри функции, и локальный импорт перекрывает атрибут модуля.
+    # Патч по svc.verify_payment не действовал — и тест был зелёным,
+    # потому что падал по другой причине.
+    import attest.payment as _ap
+    monkeypatch.setattr(_ap, "verify_payment", lambda *a, **k: object(),
+                        raising=False)
+    monkeypatch.setattr(svc, "_post_to_facilitator",
+                        lambda *a, **k: {"success": True, "transaction":
+                                         "0x" + "ab" * 32, "network": "x"},
+                        raising=False)
+    monkeypatch.setattr(svc, "_transaction_seen", lambda url, tx: False,
+                        raising=False)
+    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40,
+                 network="eip155:84532",   # сеть должна совпадать с заголовком
+                 rpc_url="https://rpc.invalid", confirm_timeout_seconds=0)
+    with pytest.raises(ServiceError) as exc:
+        settle_payment(cfg, header_value=_fake_payment_header(),
+                       attestation_sys_path=_ATTEST)
+    assert "сети" in str(exc.value) or "не найдена" in str(exc.value)
+
+
+def test_settlement_succeeds_when_transaction_is_on_chain(monkeypatch):
+    import rta.service as svc
+
+    # Патчится attest.payment, а НЕ rta.service.verify_payment:
+    # settle_payment делает `from attest.payment import verify_payment`
+    # внутри функции, и локальный импорт перекрывает атрибут модуля.
+    # Патч по svc.verify_payment не действовал — и тест был зелёным,
+    # потому что падал по другой причине.
+    import attest.payment as _ap
+    monkeypatch.setattr(_ap, "verify_payment", lambda *a, **k: object(),
+                        raising=False)
+    monkeypatch.setattr(svc, "_post_to_facilitator",
+                        lambda *a, **k: {"success": True, "transaction":
+                                         "0x" + "ab" * 32, "network": "x"},
+                        raising=False)
+    monkeypatch.setattr(svc, "_transaction_seen", lambda url, tx: True,
+                        raising=False)
+    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40,
+                 network="eip155:84532")   # сеть должна совпадать с заголовком
+    rec = settle_payment(cfg, header_value=_fake_payment_header(),
+                         attestation_sys_path=_ATTEST)
+    assert rec["settled"] is True and rec["transaction"].startswith("0x")
+
+
+def test_confirmation_is_skipped_when_no_rpc_is_configured(monkeypatch):
+    """Без RPC подтверждать нечем — это должно быть сказано вслух,
+    а не пройти молча как «оплачено»."""
+    import rta.service as svc
+
+    # Патчится attest.payment, а НЕ rta.service.verify_payment:
+    # settle_payment делает `from attest.payment import verify_payment`
+    # внутри функции, и локальный импорт перекрывает атрибут модуля.
+    # Патч по svc.verify_payment не действовал — и тест был зелёным,
+    # потому что падал по другой причине.
+    import attest.payment as _ap
+    monkeypatch.setattr(_ap, "verify_payment", lambda *a, **k: object(),
+                        raising=False)
+    monkeypatch.setattr(svc, "_post_to_facilitator",
+                        lambda *a, **k: {"success": True, "transaction":
+                                         "0x" + "ab" * 32, "network": "x"},
+                        raising=False)
+    cfg = Config(mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40,
+                 network="eip155:84532")   # сеть должна совпадать с заголовком
+    rec = settle_payment(cfg, header_value=_fake_payment_header(),
+                         attestation_sys_path=_ATTEST)
+    assert rec["settled"] is True
+    assert rec.get("confirmed_on_chain") is False, (
+        "без RPC нельзя писать, что транзакция подтверждена")
