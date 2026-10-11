@@ -68,7 +68,7 @@ def landing_html(predicates: dict | None = None,
     """
     preds = predicates or {}
     rows = "".join(
-        f"<tr><td><code>{_esc(name)}</code></td><td>{_esc(meta['label'])}</td>"
+        f"<tr><td><code>{_esc(name)}</code></td><td>{_esc(meta.get('label_en') or meta['label'])}</td>"
         f"<td class='muted'>{meta['bits']} bits</td></tr>"
         for name, meta in sorted(preds.items())
     )

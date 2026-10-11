@@ -554,3 +554,23 @@ class TestLanding(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_landing_has_no_cyrillic(server):
+    """Витрина англоязычная — целиком.
+
+    Подписи схем приходят из PREDICATES, а там русский `label`. Если бы
+    шаблон брал его напрямую, на странице остался бы русский текст в
+    таблице — заметный и сразу бросающийся в глаза иностранному покупателю.
+    Проверка ловит именно этот класс ошибки: текст из кода уехал на
+    страницу вместе с переводом статики.
+    """
+    base, _ = server
+    # Читаем сырым текстом: get() разбирает JSON, а корень отдаёт HTML.
+    import urllib.request as _u
+    with _u.urlopen(base + "/", timeout=30) as r:
+        text = r.read().decode("utf-8")
+    cyrillic = [ch for ch in text if "Ѐ" <= ch <= "ӿ"]
+    assert not cyrillic, (
+        f"на витрине осталось {len(cyrillic)} кириллических символов: "
+        f"{''.join(sorted(set(cyrillic)))[:40]}")
