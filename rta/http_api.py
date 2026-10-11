@@ -241,11 +241,32 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:                # noqa: N802
         path = self.path.split("?")[0].rstrip("/") or "/"
         if path in ("/", ""):
+            # Витрина. Машинное описание переехало на /api: корень домена
+            # — первое, что видит покупатель, и список маршрутов ему ничего
+            # не объясняет. Старый корень не исчез, а переехал.
+            from .landing import landing_html
+            atoms = self.app.cfg.price_atoms
+            price = f"{atoms / 1_000_000:g}" if atoms else "0"
+            body = landing_html(
+                predicates=PREDICATES,
+                price_usdc=price,
+                network=("Base Sepolia"
+                         if self.app.cfg.network.endswith("84532")
+                         else "Base mainnet"),
+                mode=self.app.cfg.mode,
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/api":
             self._send(200, {
                 "service": "ṚTA — zero-knowledge proof of a threshold",
                 "endpoints": ["/healthz", "/v1/predicates",
                               "POST /v1/nonce", "POST /v1/verify"],
                 "mode": self.app.cfg.mode,
+                "network": self.app.cfg.network,
             })
         elif path == "/healthz":
             self._send(*self.app.healthz())

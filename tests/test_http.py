@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -51,12 +52,12 @@ def post(url, payload):
 
 # ------------------------------------------------------------------ чтение
 
-def test_root_lists_endpoints(server):
+def test_api_lists_endpoints(server):
+    """Машинное описание переехало на /api — корень занят витриной."""
     base, _ = server
-    code, body, headers = get(base + "/")
+    code, body, headers = get(base + "/api")
     assert code == 200
     assert any("/v1/verify" in e for e in body["endpoints"])
-    # корень отдаёт JSON, а не страницу: сервис для агентов, не для людей
     assert "application/json" in headers.get("Content-Type", "")
 
 
@@ -475,3 +476,77 @@ def test_header_lookup_is_case_insensitive():
     assert _ci({"x-payment": raw}, "X-Payment") == raw
     assert _ci({"X-PAYMENT": raw}, "x-payment") == raw
     assert _ci({"x-payment": raw}, "отсутствует") is None
+
+
+class TestLanding(unittest.TestCase):
+    """Витрина на `/`, машинное описание на `/api`.
+
+    Разделено намеренно: корень домена — первое, что видит покупатель,
+    и машинный дескриптор там ничего не объясняет. При этом старый корень
+    не исчезает, а переезжает на `/api`: клиенты, которые читали его,
+    должны продолжать работать.
+    """
+
+    def setUp(self):
+        import rta.http_api as api
+        self.srv = api.create_server(api.App(Config(
+            mode="x402", price_atoms=1_000_000, pay_to="0x" + "a" * 40,
+            network="eip155:84532")), host="127.0.0.1", port=0)
+        self.base = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+    def _get(self, path):
+        with urllib.request.urlopen(self.base + path, timeout=30) as r:
+            return r.status, r.headers.get("content-type", ""), r.read()
+
+    def test_root_is_html_not_json(self):
+        code, ctype, body = self._get("/")
+        self.assertEqual(code, 200)
+        self.assertIn("text/html", ctype)
+        self.assertIn(b"<html", body[:400].lower())
+
+    def test_api_still_serves_the_machine_description(self):
+        code, _, body = self._get("/api")
+        self.assertEqual(code, 200)
+        data = json.loads(body)
+        self.assertIn("ṚTA", data["service"])
+        # В списке элемент «POST /v1/verify», поэтому ищем по вхождению,
+        # а не по равенству: посимвольная проверка ловит и опечатку пути.
+        self.assertTrue(any("/v1/verify" in e for e in data["endpoints"]),
+                        f"нет /v1/verify среди {data['endpoints']}")
+
+    def test_landing_states_the_testnet_truthfully(self):
+        """Продавать на тестнете молча нельзя. Страница обязана говорить,
+        что сеть тестовая и деньги настоящие не принимаются."""
+        _, _, body = self._get("/")
+        text = body.decode("utf-8").lower()
+        self.assertIn("sepolia", text)
+        self.assertIn("тестов", text)
+
+    def test_landing_discloses_the_forgery_risk(self):
+        """Риск подделки — первый в списке. Скрытая оговорка делает
+        страницу враньём, даже если всё остальное написано верно."""
+        _, _, body = self._get("/")
+        text = body.decode("utf-8")
+        self.assertTrue("поддел" in text.lower() or "односторонн" in text.lower(),
+                        "страница молчит о риске подделки доказательств")
+
+    def test_landing_lists_all_five_predicates(self):
+        _, _, body = self._get("/")
+        text = body.decode("utf-8")
+        # Имена именно из /v1/predicates — там дефис, а не подчёркивание.
+        for name in ("balance-1000", "balance-100000", "stake-10000",
+                     "account-age-180", "tx-count-50"):
+            self.assertIn(name, text, f"витрина не упоминает схему {name}")
+
+    def test_landing_shows_no_public_signals(self):
+        _, _, body = self._get("/")
+        self.assertIn("пуст", body.decode("utf-8").lower())
+
+
+if __name__ == "__main__":
+    unittest.main()
