@@ -69,7 +69,7 @@ def landing_html(predicates: dict | None = None,
     preds = predicates or {}
     rows = "".join(
         f"<tr><td><code>{_esc(name)}</code></td><td>{_esc(meta['label'])}</td>"
-        f"<td class='muted'>{meta['bits']} бит</td></tr>"
+        f"<td class='muted'>{meta['bits']} bits</td></tr>"
         for name, meta in sorted(preds.items())
     )
 
@@ -79,10 +79,10 @@ def landing_html(predicates: dict | None = None,
     if testnet:
         banner = """
 <div class="card warn">
-<b>Сервис работает в тестовой сети Base Sepolia.</b> Деньги настоящие не
-принимаются: оплата идёт тестовыми USDC, которые ничего не стоят. Переход
-на mainnet не объявлен. Проверяйте платёжный путь, но не пишите это
-в договор.
+<b>This service runs on Base Sepolia, a test network.</b> No real money is
+accepted — payments are in test USDC, which is worth nothing. Mainnet has
+not been announced. Use it to test the payment path; do not put it in a
+contract.
 </div>"""
     elif mode == "free":
         banner = """
@@ -91,97 +91,97 @@ def landing_html(predicates: dict | None = None,
 </div>"""
 
     return f"""<!doctype html>
-<html lang="ru"><head><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ṚTA — доказать факт, не раскрыв его</title>
+<title>ṚTA — prove a fact without revealing it</title>
 <style>{_STYLE}</style></head><body><div class="wrap">
 
 <h1>ṚTA</h1>
-<p class="lede">Доказать, что условие выполнено, не раскрывая самого значения.
-Проверяющий узнаёт, что порог пройден, и не узнаёт ничего больше.</p>
+<p class="lede">Show that a condition holds without revealing the value behind it.
+The verifier learns that the threshold was met, and nothing else.</p>
 
 {banner}
 
 <div class="card warn">
-<b>Риск, о котором нужно знать до покупки: доказательства можно подделать.</b><br>
-Церемония параметров односторонняя — участник один, значит «мусор», из
-которого восстанавливается секрет, известен этому же человеку. Он способен
-выпустить доказательство для несуществующего секрета.<br>
-До участия трёх независимых сторон ключ нельзя считать доверенным. Это
-ограничение продукта, а не недоработка документации.
+<b>Read this before you buy: proofs can be forged.</b><br>
+The ceremony is single-party. With one participant, the trapdoor material
+that would reveal a secret is known to that same person — who can therefore
+mint a proof for a secret that does not exist.<br>
+Until three independent parties take part, the key cannot be considered
+trusted. This is a limitation of the product, not a documentation gap.
 </div>
 
-<h2>Что доказывается</h2>
+<h2>What you can prove</h2>
 <table>
-<tr><th>Схема</th><th>Что подтверждает</th><th>Разрядность</th></tr>
+<tr><th>Circuit</th><th>What it proves</th><th>Width</th></tr>
 {rows}
 </table>
 
 <div class="card ok">
-<b>Что узнаёт проверяющий:</b> только факт «порог пройден».<br>
-<b>Что он не узнаёт:</b> сумму, залог, возраст аккаунта, число операций.<br>
-Публичные сигналы доказательства пусты — это измерено на живых
-доказательствах, а не заявлено.
+<b>What the verifier learns:</b> only that the threshold was met.<br>
+<b>What they never learn:</b> the balance, the stake, the account age, the
+transaction count.<br>
+The proof publishes zero public signals — measured on live proofs, not
+claimed.
 </div>
 
-<h2>Сколько и как</h2>
+<h2>Price and payment</h2>
 <div class="card">
-<div class="price">{_esc(price_usdc)} USDC <span class="muted">за одну проверку</span></div>
-<div class="muted">Сеть: {_esc(network)} · протокол: x402 (v2) · без подписки и аккаунта</div>
+<div class="price">{_esc(price_usdc)} USDC <span class="muted">per verification</span></div>
+<div class="muted">Network: {_esc(network)} · Protocol: x402 (v2) · no account, no subscription</div>
 </div>
-<p class="muted">Оплата приходит вместе с запросом: сервис отвечает счётом,
-клиент подписывает платёж своим кошельком и повторяет запрос с оплатой.
-Регистрация не нужна — нужен кошелёк с небольшим количеством USDC.</p>
+<p class="muted">Payment rides along with the request: the service answers with
+an invoice, the client signs the payment with its own wallet and repeats the
+request carrying it. No signup — just a wallet holding a little USDC.</p>
 
-<h2>Как использовать</h2>
-<pre><code><span class="c"># 1. взять одноразовый токен под одно доказательство</span>
+<h2>How to use it</h2>
+<pre><code><span class="c"># 1. take a single-use token, one per proof</span>
 curl -s -X POST /v1/nonce \\
   -H 'Content-Type: application/json' \\
   -d '{{"predicate": "balance_1000"}}'
 
-<span class="c"># 2. получить счёт: сумма, сеть, адрес получателя</span>
+<span class="c"># 2. get the invoice: amount, network, payee address</span>
 curl -si -X POST /v1/verify \\
   -H 'Content-Type: application/json' \\
   -d '{{"predicate": "balance_1000"}}'
-<span class="c"># → HTTP 402 и заголовок x402 с параметрами оплаты</span>
+<span class="c"># → HTTP 402 plus an x402 header with the payment terms</span>
 
-<span class="c"># 3. подписать оплату EIP-3009 своим кошельком</span>
-<span class="c">#    и положить подпись в заголовок PAYMENT-SIGNATURE</span>
+<span class="c"># 3. sign the EIP-3009 payment with your wallet and put it</span>
+<span class="c">#    in the PAYMENT-SIGNATURE header</span>
 
-<span class="c"># 4. отправить доказательство вместе с оплатой</span>
+<span class="c"># 4. send the proof together with the payment</span>
 curl -s -X POST /v1/verify \\
   -H 'Content-Type: application/json' \\
   -H "PAYMENT-SIGNATURE: $PAYMENT" \\
   -d '{{"predicate":"balance_1000","proof":<proof>,
       "public_signals":[], "nonce":"<nonce>"}}'</code></pre>
 
-<p class="muted">Ответ приходит с вердиктом <code>VERIFIED</code>, хешем
-транзакции в блокчейне и заголовком <code>X-Payment-Response</code>.
-Повторное предъявление того же nonce отклоняется: одна оплата — одна
-проверка.</p>
+<p class="muted">The reply carries a <code>VERIFIED</code> verdict, the
+transaction hash on chain, and an <code>X-Payment-Response</code> header.
+Replaying the same nonce is rejected: one payment, one verification.</p>
 
-<h2>Маршруты</h2>
+<h2>Endpoints</h2>
 <table>
-<tr><th>Маршрут</th><th>Что делает</th></tr>
-<tr><td><code>GET /healthz</code></td><td>живо ли сервис; сам сообщает свои ограничения</td></tr>
-<tr><td><code>GET /v1/predicates</code></td><td>список схем с порогами</td></tr>
-<tr><td><code>POST /v1/nonce</code></td><td>одноразовый токен под одно доказательство</td></tr>
-<tr><td><code>POST /v1/verify</code></td><td>проверка; без оплаты отвечает счётом 402</td></tr>
-<tr><td><code>GET /api</code></td><td>машинное описание сервиса (бывший корень)</td></tr>
+<tr><th>Endpoint</th><th>What it does</th></tr>
+<tr><td><code>GET /healthz</code></td><td>liveness, and the service states its own limits</td></tr>
+<tr><td><code>GET /v1/predicates</code></td><td>circuits with their thresholds</td></tr>
+<tr><td><code>POST /v1/nonce</code></td><td>single-use token, one per proof</td></tr>
+<tr><td><code>POST /v1/verify</code></td><td>verify; answers 402 with an invoice when unpaid</td></tr>
+<tr><td><code>GET /api</code></td><td>machine-readable service description</td></tr>
 </table>
 
-<h2>Ограничения, честно</h2>
+<h2>Limitations, stated plainly</h2>
 <ul class="muted">
-<li>Состояние в памяти: перезапуск обнуляет выданные токены и счётчики.</li>
-<li>Внешнего аудита схемы нет — она написана нами и нами же проверена.</li>
-<li>Параметры ceremony сгенерированы локально, покупатель пересобрать их не сможет.</li>
-<li>Доказательства подделываемы — см. предупреждение выше.</li>
+<li>State is in memory: a restart clears issued tokens and counters.</li>
+<li>No external audit of the circuits — we wrote them and we verified them.</li>
+<li>Ceremony parameters were generated locally; a buyer cannot rebuild the chain.</li>
+<li>Proofs are forgeable — see the warning above.</li>
 </ul>
 
 <p class="muted" style="margin-top:40px">
-Имя — из ведической космологии: Ṛta — порядок, истина и правильное
-соответствие между действием и следствием. Ровно то, что делает
-доказательство: следствие следует из действия по правилу, и никакого иного
-варианта нет.
+The name comes from Vedic cosmology: Ṛta is order, truth, and the right
+correspondence between action and consequence — which is precisely what a
+proof does. The consequence follows from the action by rule, and no other
+outcome is possible.
 </p>
 </div></body></html>"""

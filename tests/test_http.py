@@ -508,6 +508,7 @@ class TestLanding(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIn("text/html", ctype)
         self.assertIn(b"<html", body[:400].lower())
+        self.assertIn(b'lang="en"', body[:200].lower())
 
     def test_api_still_serves_the_machine_description(self):
         code, _, body = self._get("/api")
@@ -525,14 +526,16 @@ class TestLanding(unittest.TestCase):
         _, _, body = self._get("/")
         text = body.decode("utf-8").lower()
         self.assertIn("sepolia", text)
-        self.assertIn("тестов", text)
+        self.assertIn("test network", text)
+        self.assertIn("no real money", text)
 
     def test_landing_discloses_the_forgery_risk(self):
         """Риск подделки — первый в списке. Скрытая оговорка делает
         страницу враньём, даже если всё остальное написано верно."""
         _, _, body = self._get("/")
         text = body.decode("utf-8")
-        self.assertTrue("поддел" in text.lower() or "односторонн" in text.lower(),
+        low = body.decode("utf-8").lower()
+        self.assertTrue("forge" in low or "single-party" in low,
                         "страница молчит о риске подделки доказательств")
 
     def test_landing_lists_all_five_predicates(self):
@@ -545,7 +548,8 @@ class TestLanding(unittest.TestCase):
 
     def test_landing_shows_no_public_signals(self):
         _, _, body = self._get("/")
-        self.assertIn("пуст", body.decode("utf-8").lower())
+        low = body.decode("utf-8").lower()
+        self.assertIn("zero public signals", low)
 
 
 if __name__ == "__main__":
