@@ -72,7 +72,7 @@ class App:
     def predicates(self) -> tuple[int, dict]:
         return 200, {"predicates": [
             {"name": k, "threshold": v["threshold"], "bits": v["bits"],
-             "label": v["label"]}
+             "label": v["label"], "label_en": v["label_en"]}
             for k, v in sorted(PREDICATES.items())
         ]}
 
