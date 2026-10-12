@@ -68,7 +68,7 @@ def test_healthz_declares_its_weaknesses(server):
     code, body, _ = get(base + "/healthz")
     assert code == 200 and body["ok"] is True
     assert body["stateful"] is False
-    assert "перезапуск" in body["warning"]
+    assert "restart" in body["warning"] and "memory" in body["warning"]
     assert body["engine"] == "groth16"
 
 
@@ -112,7 +112,10 @@ def test_nonce_for_unknown_predicate_is_refused(server):
     base, _ = server
     code, body, _ = post(base + "/v1/nonce", {"predicate": "всё-и-всякое"})
     assert code == 400
-    assert "неизвестен" in body["error"]
+    assert "unknown predicate" in body["error"]
+    # Перечисление доступных имён обязано быть в ответе: клиенту нужно
+    # знать, что выбрать, а не гадать.
+    assert "balance-1000" in body["error"]
 
 
 def test_verify_without_nonce_is_refused(server):
@@ -143,7 +146,7 @@ def test_oversized_body_is_refused(server):
     base, _ = server
     huge = {"predicate": "balance-1000", "pad": "x" * (300 * 1024)}
     code, body, _ = post(base + "/v1/nonce", huge)
-    assert code == 400 and "больше" in body["error"]
+    assert code == 400 and "larger than" in body["error"]
 
 
 def test_rate_limit_kicks_in(server):
@@ -167,7 +170,7 @@ def test_bad_proof_is_rejected_with_fresh_nonce(server):
         "public_signals": [], "nonce": nb["nonce"]})
     assert code == 200
     assert body["ok"] is False
-    assert "секрет не раскрыт" in body["disclosed"]
+    assert "not disclosed" in body["disclosed"]
 
 
 # --------------------------------------------------------------------- x402

@@ -64,22 +64,22 @@ class App:
             "uptime_seconds": round(time.time() - self.started, 1),
             "predicates": len(PREDICATES),
             "stateful": False,
-            "warning": "состояние в памяти: перезапуск обнуляет выданные "
+            "warning": "state is in memory: a restart wipes the issued "
                        "nonce и счётчики. Не годится для продакшна без "
-                       "постоянного хранилища.",
+                       "nonces permanently.",
         }
 
     def predicates(self) -> tuple[int, dict]:
         return 200, {"predicates": [
             {"name": k, "threshold": v["threshold"], "bits": v["bits"],
-             "label": v["label"], "label_en": v["label_en"]}
+             "label": v["label"]}
             for k, v in sorted(PREDICATES.items())
         ]}
 
     def issue_nonce(self, body: dict) -> tuple[int, dict]:
         predicate = body.get("predicate")
         if predicate not in PREDICATES:
-            raise ServiceError(f"предикат {predicate!r} неизвестен; доступен: "
+            raise ServiceError(f"unknown predicate {predicate!r}; available: "
                                f"{', '.join(sorted(PREDICATES))}")
         nonce = self.nonces.issue()
         self.counts["nonce"] += 1
@@ -93,7 +93,7 @@ class App:
         nonce = body.get("nonce")
 
         if predicate not in PREDICATES:
-            raise ServiceError(f"предикат {predicate!r} неизвестен")
+            raise ServiceError(f"unknown predicate {predicate!r}")
         if not isinstance(proof, dict):
             raise ServiceError("proof должен быть объектом")
         if not isinstance(public, list):
@@ -106,7 +106,7 @@ class App:
             self.counts["rejected"] += 1
             return 409, {"ok": False,
                          "error": f"nonce недействителен ({status}); каждое "
-                                  f"доказательство проверяется один раз"}
+                                  f"the proof can be verified only once"}
 
         # Ключ — по предикату. Раньше здесь стоял один build/vk.json на всех,
         # а он является копией tx_count_50_vk.json: четыре схемы из пяти
@@ -119,10 +119,10 @@ class App:
             self.counts["accepted"] += 1
             return 200, {"ok": True, "predicate": predicate,
                          "verdict": why,
-                         "disclosed": "ничего: публичные сигналы пусты"}
+                         "disclosed": "nothing: the public signals are empty"}
         self.counts["rejected"] += 1
         return 200, {"ok": False, "predicate": predicate, "verdict": why,
-                     "disclosed": "проверка не прошла; секрет не раскрыт"}
+                     "disclosed": "verification failed; the secret is not disclosed"}
 
     def nonce_problem(self, nonce) -> str | None:
         """Одноразовость. None — можно проверять дальше.
@@ -139,7 +139,7 @@ class App:
         status = self.nonces.status(nonce) if nonce else "unknown"
         if status != "issued":
             return (f"nonce недействителен ({status}); каждое доказательство "
-                    f"проверяется один раз")
+                    f"can be verified only once")
         return None
 
     def verify_paid(self, body: dict, resource_url: str,
@@ -209,14 +209,14 @@ class Handler(BaseHTTPRequestHandler):
         if length <= 0:
             return {}
         if length > MAX_BODY_BYTES:
-            raise ServiceError(f"тело запроса больше {MAX_BODY_BYTES} байт")
+            raise ServiceError(f"request body larger than {MAX_BODY_BYTES} bytes")
         raw = self.rfile.read(length)
         try:
             data = json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError as exc:
-            raise ServiceError(f"тело не разобрано как JSON: {exc}") from exc
+            raise ServiceError(f"request body is not valid JSON: {exc}") from exc
         if not isinstance(data, dict):
-            raise ServiceError("в теле ожидается объект")
+            raise ServiceError("a JSON object is expected in the body")
         return data
 
     def _resource_url(self) -> str:
@@ -273,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/v1/predicates":
             self._send(*self.app.predicates())
         else:
-            self._send(404, {"ok": False, "error": f"нет маршрута {path}"})
+            self._send(404, {"ok": False, "error": f"no route for {path}"})
 
     def do_POST(self) -> None:               # noqa: N802
         path = self.path.split("?")[0].rstrip("/")
@@ -329,7 +329,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._send(*self.app.verify(body, self._resource_url()))
             else:
-                self._send(404, {"ok": False, "error": f"нет маршрута {path}"})
+                self._send(404, {"ok": False, "error": f"no route for {path}"})
         except ServiceError as exc:
             self._send(400, {"ok": False, "error": str(exc)})
         except Exception as exc:              # noqa: BLE001
