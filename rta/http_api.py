@@ -212,6 +212,43 @@ def _sitemap() -> str:
             f"{urls}</urlset>")
 
 
+def _schema_block() -> str:
+    """Разметка товара для поиска: тип, имя, цена, где найти."""
+    data = {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "\u1e5aTA",
+        "alternateName": "RTA",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Any",
+        "description": ("Zero-knowledge proof over HTTP: prove a fact "
+                        "without revealing it. Returns a verifiable proof "
+                        "with no SDK, no ceremony and no key rotation."),
+        "url": "https://rta.lat/",
+        "offers": {"@type": "Offer", "price": "1",
+                   "priceCurrency": "USDC"},
+    }
+    return ('<script type="application/ld+json">'
+            + json.dumps(data, ensure_ascii=False) + "</script>")
+
+
+def _with_schema(html: str) -> str:
+    """Вставить разметку в HTML. Идемпотентно: повтор не дублирует."""
+    if not isinstance(html, str) or "application/ld+json" in html:
+        return html
+    block = _schema_block()
+    lowered = html.lower()
+    for marker in ("</head>", "<body", "</title>"):
+        pos = lowered.find(marker)
+        if pos != -1:
+            return html[:pos] + block + html[pos:]
+    import re
+    m = re.search(r"<meta[^>]+charset[^>]*>", html, re.IGNORECASE)
+    if m:
+        return html[:m.end()] + block + html[m.end():]
+    return block + html
+
+
 def _send_raw(handler, body: bytes, content_type: str) -> None:
     """Отдать не-JSON. `_send` умеет только словарь с json.dumps."""
     handler.send_response(200)
@@ -299,7 +336,8 @@ class Handler(BaseHTTPRequestHandler):
                          if self.app.cfg.network.endswith("84532")
                          else "Base mainnet"),
                 mode=self.app.cfg.mode,
-            ).encode("utf-8")
+            )
+            body = _with_schema(body).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
