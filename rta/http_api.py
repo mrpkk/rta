@@ -184,6 +184,45 @@ class App:
                                 "Content-Type": "application/json"}
 
 
+def _base_url() -> str:
+    """Публичный адрес: в sitemap обязаны быть абсолютные URL."""
+    import os
+    return os.environ.get("RTA_BASE_URL", "https://rta.lat").rstrip("/")
+
+
+def _robots() -> str:
+    """Краулеров пускаем: индексация витрины — это трафик."""
+    return ("User-agent: *\n"
+            "Allow: /\n"
+            "Disallow: /mcp\n"
+            f"Sitemap: {_base_url()}/sitemap.xml\n")
+
+
+def _sitemap() -> str:
+    """Карта сайта: документы, а не endpoints.
+
+    `/challenge` и `/verify` — машиночитаемые адреса, их индексация
+    бессмысленна.
+    """
+    base = _base_url()
+    urls = "".join(
+        f"<url><loc>{base}{page}</loc></url>" for page in ("", "/health"))
+    return ('<?xml version="1.0" encoding="UTF-8"?>'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            f"{urls}</urlset>")
+
+
+def _send_raw(handler, body: bytes, content_type: str) -> None:
+    """Отдать не-JSON. `_send` умеет только словарь с json.dumps."""
+    handler.send_response(200)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    try:
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+
 class Handler(BaseHTTPRequestHandler):
     app: App = None       # проставляется в create_server
     server_version = f"rta/{VERSION}"
@@ -240,6 +279,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:                # noqa: N802
         path = self.path.split("?")[0].rstrip("/") or "/"
+        if path == "/robots.txt":
+            return _send_raw(self, _robots().encode("utf-8"),
+                              "text/plain; charset=utf-8")
+        if path == "/sitemap.xml":
+            return _send_raw(self, _sitemap().encode("utf-8"),
+                              "application/xml; charset=utf-8")
         if path in ("/", ""):
             # Витрина. Машинное описание переехало на /api: корень домена
             # — первое, что видит покупатель, и список маршрутов ему ничего
