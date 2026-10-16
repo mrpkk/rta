@@ -577,3 +577,60 @@ def test_landing_has_no_cyrillic(server):
     assert not cyrillic, (
         f"на витрине осталось {len(cyrillic)} кириллических символов: "
         f"{''.join(sorted(set(cyrillic)))[:40]}")
+
+
+class TestPaymentReceiptAndReplay:
+    """Квитанция самодостаточна, а повтор отсекается до сети."""
+
+    def _app(self):
+        import rta.http_api as api
+        from rta.service import Config
+        return api.App(Config(mode="x402", price_atoms=1_000_000,
+                              pay_to="0x" + "a" * 40,
+                              facilitator="https://f.example"))
+
+    def test_receipt_names_payer_and_nonce(self):
+        """Для возврата плательщик должен быть в теле, а не в заголовке."""
+        import rta.http_api as api
+        receipt = {"settled": True, "transaction": "0xdead",
+                   "network": "eip155:8453", "amount_atoms": 1_000_000,
+                   "pay_to": "0x" + "a" * 40, "payer": "0x" + "b" * 40,
+                   "nonce": "n1", "confirmed_on_chain": True}
+        app = self._app()
+        _, payload, _ = app.verify_paid(
+            {"predicate": "balance-1000", "proof": {"protocol": "groth16"},
+             "public_signals": [], "nonce": "n0"}, "https://rta.lat/v1/verify",
+            receipt)
+        pay = payload["payment"]
+        assert pay["payer"] == "0x" + "b" * 40
+        assert pay["nonce"] == "n1"
+        assert pay["confirmed_on_chain"] is True
+        assert pay["transaction"] == "0xdead"
+
+    def test_app_starts_with_empty_seen_nonces(self):
+        assert self._app().seen_payment_nonces == set()
+
+    def test_settle_receives_seen_nonces(self, monkeypatch):
+        """Параметр был в сигнатуре и не передавался — это надо ловить."""
+        import rta.http_api as api
+        seen_arg = {}
+
+        def fake(cfg, header, **kw):
+            seen_arg["value"] = kw.get("seen_nonces")
+            return {"settled": True, "transaction": "0xdead",
+                    "network": "eip155:8453", "amount_atoms": 1_000_000,
+                    "pay_to": "0x" + "a" * 40, "payer": "0x" + "b" * 40,
+                    "nonce": "n1"}
+
+        monkeypatch.setattr(api, "settle_payment", fake)
+
+        def body(base):
+            _, nb, _ = post(base + "/v1/nonce", {"predicate": "balance-1000"})
+            return _post_with_payment(
+                base + "/v1/verify",
+                {"predicate": "balance-1000", "proof": {"protocol": "groth16"},
+                 "public_signals": [], "nonce": nb["nonce"]}, "payload")
+
+        _run(self._app(), body)
+        assert seen_arg.get("value") is not None, \
+            "seen_nonces не передаётся: повтор оплаты уйдёт в сеть"

@@ -51,6 +51,10 @@ class App:
         self.limiter = RateLimiter(self.cfg.rate_limit_per_minute)
         self.started = time.time()
         self.counts = {"nonce": 0, "verify": 0, "accepted": 0, "rejected": 0}
+        # Nonce'ы уже предъявленных платежей. EIP-3009 отверг бы повтор и
+        # на цепи, но без этой проверки каждый повтор сначала уходит в сеть
+        # и тратит время фасилитатора. Параметр был, а никто его не передавал.
+        self.seen_payment_nonces: set[str] = set()
 
     # ---------------------------------------------------------- маршруты
 
@@ -156,7 +160,13 @@ class App:
                               "transaction": receipt.get("transaction"),
                               "network": receipt.get("network"),
                               "amount_atoms": receipt.get("amount_atoms"),
-                              "pay_to": receipt.get("pay_to")}
+                              "pay_to": receipt.get("pay_to"),
+                              # Для возврата нужно знать, кто платил и чем,
+                              # прямо в теле ответа, а не в заголовке.
+                              "payer": receipt.get("payer"),
+                              "nonce": receipt.get("nonce"),
+                              "confirmed_on_chain":
+                                  receipt.get("confirmed_on_chain")}
         import base64 as _b64
         import json as _json
         resp = _b64.b64encode(_json.dumps(
@@ -398,7 +408,9 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     try:
                         receipt = settle_payment(
-                            self.app.cfg, header, attestation_sys_path=_ATTEST)
+                            self.app.cfg, header,
+                            attestation_sys_path=_ATTEST,
+                            seen_nonces=self.app.seen_payment_nonces)
                     except ServiceError as exc:
                         # Платы не состоялось — доказательство не выдаём,
                         # но и не требуем оплату повторно вслепую: клиенту
