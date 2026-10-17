@@ -172,7 +172,7 @@ Replaying the same nonce is rejected: one payment, one verification.</p>
 
 <h2>Limitations, stated plainly</h2>
 <ul class="muted">
-<li>State is in memory: a restart clears issued tokens and counters.</li>
+<li>State is on disk since 17.10.2026: issued and spent tokens survive a restart. Counters too.</li>
 <li>No external audit of the circuits — we wrote them and we verified them.</li>
 <li>Ceremony parameters were generated locally; a buyer cannot rebuild the chain.</li>
 <li>Proofs are forgeable — see the warning above.</li>

@@ -125,6 +125,7 @@ class Config:
     network: str = DEFAULT_NETWORK
     rpc_url: str = ""
     confirm_timeout_seconds: int = 3
+    state_dir: str = ""
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -147,27 +148,81 @@ class Config:
                    network=network,
                    facilitator=os.getenv("RTA_FACILITATOR",
                                          DEFAULT_FACILITATOR),
-                   rpc_url=os.getenv("RTA_RPC_URL", ""))
+                   rpc_url=os.getenv("RTA_RPC_URL", ""),
+                     state_dir=os.getenv("RTA_STATE_DIR", ""))
+
+
+def _atomic_write(path: Path, payload: dict) -> None:
+    """Запись через временный файл: перезапуск в момент записи не портит состояние."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _read_json(path: Path) -> dict:
+    """Чтение терпимое: испорченный файл не должен ронять сервис."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 class NonceStore:
-    """Одноразовость проверок в пределах процесса.
+    """Одноразовость проверок.
 
-    Граница честная: при перезапуске процесса память пуста, и ранее
-    выданные nonce перестают действовать. Постоянное хранилище нужно
-    для продакшна — здесь оно намеренно не сделано, потому что тихо
-    хранить nonce в файле хуже, чем объявить об этом.
+    С 17.10.2026 состояние переживает перезапуск: выданные и потраченные
+    nonce лежат на диске. До этого память была единственным хранилищем, и
+    рестарт возвращал потраченные nonce к жизни — доказательство можно было
+    предъявить повторно. Страница об этом честно предупреждала, но
+    предупреждение не заменяет исправление.
+
+    Путь не задан — поведение прежнее, только память: так работают тесты
+    и встраивание в чужой процесс.
     """
 
-    def __init__(self, ttl_seconds: int = 900):
+    SAVE_THROTTLE_SEC = 1.0
+
+    def __init__(self, ttl_seconds: int = 900, state_path=None):
         self._issued: dict[str, float] = {}
         self._used: set[str] = set()
         self._ttl = ttl_seconds
+        self._state_path = Path(state_path) if state_path else None
+        self._last_save = 0.0
+        if self._state_path:
+            self._load()
+
+    def _load(self) -> None:
+        data = _read_json(self._state_path)
+        issued = data.get("issued") or {}
+        if isinstance(issued, dict):
+            self._issued = {str(k): float(v) for k, v in issued.items()}
+        used = data.get("used") or []
+        if isinstance(used, list):
+            self._used = {str(n) for n in used}
+        self.prune()
+
+    def _save(self, force: bool = False) -> None:
+        if not self._state_path:
+            return
+        now = time.time()
+        if not force and now - self._last_save < self.SAVE_THROTTLE_SEC:
+            return
+        self._last_save = now
+        try:
+            _atomic_write(self._state_path, {
+                "issued": self._issued,
+                "used": sorted(self._used),
+            })
+        except OSError as exc:
+            print(f"rta: nonce не сохранены: {exc}")
 
     def issue(self) -> str:
         import secrets
         nonce = secrets.token_hex(32)
         self._issued[nonce] = time.time()
+        self._save()
         return nonce
 
     def status(self, nonce: str) -> str:
@@ -182,6 +237,7 @@ class NonceStore:
             raise ServiceError(f"nonce недействителен или уже использован "
                                f"({self.status(nonce)})")
         self._used.add(nonce)
+        self._save(force=True)
 
     def prune(self) -> int:
         now = time.time()

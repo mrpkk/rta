@@ -475,3 +475,101 @@ def test_confirmation_is_skipped_when_no_rpc_is_configured(monkeypatch):
     assert rec["settled"] is True
     assert rec.get("confirmed_on_chain") is False, (
         "без RPC нельзя писать, что транзакция подтверждена")
+
+
+# ------------------------------------------------------ состояние на диске
+
+
+class TestNonceStoreSurvivesRestart:
+    """Перезапуск процесса не должен воскрешать потраченный nonce.
+
+    До 17.10.2026 состояние жило только в памяти: сервис падал или
+    перезапускался — и доказательство, за которое уже заплатили, можно
+    было предъявить второй раз. На странице об этом честно писали, но
+    предупреждение не отменяет потерю денег.
+    """
+
+    def test_spent_nonce_stays_spent_after_restart(self, tmp_path):
+        path = tmp_path / "nonces.json"
+        first = NonceStore(state_path=path)
+        nonce = first.issue()
+        first.consume(nonce)
+        assert first.status(nonce) == "used"
+
+        second = NonceStore(state_path=path)      # как после перезапуска
+        assert second.status(nonce) == "used", (
+            "потраченный nonce вернулся к жизни — доказательство можно "
+            "предъявить повторно по той же оплате")
+
+    def test_issued_nonce_still_valid_after_restart(self, tmp_path):
+        """Выданный, но не потраченный nonce обязан работать: клиент мог
+        получить его перед самым перезапуском."""
+        path = tmp_path / "nonces.json"
+        first = NonceStore(state_path=path)
+        nonce = first.issue()
+
+        second = NonceStore(state_path=path)
+        assert second.status(nonce) == "issued"
+        second.consume(nonce)                     # не должно бросить
+
+    def test_expired_nonce_is_not_resurrected(self, tmp_path):
+        """Срок истёк, пока сервис лежал — nonce мёртв, а не «выдан».
+
+        Состояние пишем напрямую со старым сроком: ждать истечения
+        в тесте нечем.
+        """
+        import json as _json
+        import time as _time
+
+        path = tmp_path / "nonces.json"
+        path.write_text(_json.dumps({
+            "issued": {"старый": _time.time() - 4000},
+            "used": [],
+        }), encoding="utf-8")
+
+        store = NonceStore(ttl_seconds=900, state_path=path)
+        assert store.status("старый") == "unknown", (
+            "просроченный nonce воскрешён при загрузке")
+
+    def test_corrupt_file_does_not_break_startup(self, tmp_path):
+        """Испорченный файл — не повод не подняться."""
+        path = tmp_path / "nonces.json"
+        path.write_text("{это не json", encoding="utf-8")
+        store = NonceStore(state_path=path)       # не должно бросить
+        nonce = store.issue()
+        assert store.status(nonce) == "issued"
+
+    def test_without_path_behaves_as_before(self, tmp_path):
+        """Путь не задан — только память. Так работают тесты и встраивание."""
+        store = NonceStore()
+        nonce = store.issue()
+        store.consume(nonce)
+        assert store.status(nonce) == "used"
+        assert not list(tmp_path.iterdir())
+
+
+class TestAppStateSurvivesRestart:
+    """Счётчики и потраченные платежи тоже переживают перезапуск."""
+
+    def test_counters_and_paid_nonces_persist(self, tmp_path):
+        from rta.http_api import App
+
+        cfg = Config(state_dir=str(tmp_path))
+        app = App(cfg)
+        app.counts["nonce"] += 1
+        app.counts["accepted"] += 3
+        app.seen_payment_nonces.add("0xоплаченный")
+        app.save_state(force=True)
+
+        reborn = App(Config(state_dir=str(tmp_path)))
+        assert reborn.counts["nonce"] == 1
+        assert reborn.counts["accepted"] == 3
+        assert "0xоплаченный" in reborn.seen_payment_nonces, (
+            "предъявленный платёж снова считается новым — оплата "
+            "принимается дважды")
+
+    def test_healthz_reports_state_on_disk(self, tmp_path):
+        from rta.http_api import App
+        app = App(Config(state_dir=str(tmp_path)))
+        _, body = app.healthz()
+        assert body["stateful"] is True, "healthz скрывает, что состояние на диске"

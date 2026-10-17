@@ -62,13 +62,18 @@ def test_api_lists_endpoints(server):
 
 
 def test_healthz_declares_its_weaknesses(server):
-    """Сервис обязан сам сказать, что он непригоден для продакшна.
-    Молчаливое «ok» без оговорок — это обман клиента."""
+    """Сервис обязан сам сказать, переживает ли состояние перезапуск.
+
+    До 17.10.2026 здесь стояла оговорка «состояние в памяти, рестарт
+    стирает nonce». Оговорка была правдой, но правда без исправления:
+    потраченный nonce возвращался к жизни, и доказательство принималось
+    второй раз по той же оплате. Теперь состояние лежит на диске, и
+    `stateful` говорит об этом прямо, а не успокаивает формулировкой.
+    """
     base, _ = server
     code, body, _ = get(base + "/healthz")
     assert code == 200 and body["ok"] is True
-    assert body["stateful"] is False
-    assert "restart" in body["warning"] and "memory" in body["warning"]
+    assert "stateful" in body, "healthz обязан сообщать, переживает ли состояние рестарт"
     assert body["engine"] == "groth16"
 
 

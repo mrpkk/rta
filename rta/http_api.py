@@ -45,9 +45,18 @@ MAX_BODY_BYTES = 256 * 1024
 class App:
     """Состояние сервиса. Один объект на процесс — состояние в памяти."""
 
+    STATE_SAVE_THROTTLE_SEC = 1.0
+
     def __init__(self, cfg: Config | None = None) -> None:
         self.cfg = cfg or Config.from_env()
-        self.nonces = NonceStore()
+        # Состояние на диске. Раньше всё жило в памяти, и перезапуск
+        # возвращал потраченные nonce к жизни: доказательство можно было
+        # предъявить второй раз по той же оплате. Счётчики при этом
+        # обнулялись, и /metrics врал о нулевой нагрузке.
+        state_dir = Path(self.cfg.state_dir) if self.cfg.state_dir else None
+        self._state_path = (state_dir / "api.json") if state_dir else None
+        self.nonces = NonceStore(
+            state_path=(state_dir / "nonces.json") if state_dir else None)
         self.limiter = RateLimiter(self.cfg.rate_limit_per_minute)
         self.started = time.time()
         self.counts = {"nonce": 0, "verify": 0, "accepted": 0, "rejected": 0}
@@ -55,6 +64,41 @@ class App:
         # на цепи, но без этой проверки каждый повтор сначала уходит в сеть
         # и тратит время фасилитатора. Параметр был, а никто его не передавал.
         self.seen_payment_nonces: set[str] = set()
+        self._last_save = 0.0
+        self._load_state()
+
+    # ---------------------------------------------------------- состояние
+
+    def _load_state(self) -> None:
+        if not self._state_path:
+            return
+        from .service import _read_json
+        data = _read_json(self._state_path)
+        seen = data.get("seen_payment_nonces") or []
+        if isinstance(seen, list):
+            self.seen_payment_nonces = {str(n) for n in seen}
+        counts = data.get("counts") or {}
+        if isinstance(counts, dict):
+            for key in self.counts:
+                if isinstance(counts.get(key), int):
+                    self.counts[key] = counts[key]
+
+    def save_state(self, force: bool = False) -> None:
+        """Сохранить состояние. Троттлинг, потому что вызов частый."""
+        if not self._state_path:
+            return
+        now = time.time()
+        if not force and now - self._last_save < self.STATE_SAVE_THROTTLE_SEC:
+            return
+        self._last_save = now
+        from .service import _atomic_write
+        try:
+            _atomic_write(self._state_path, {
+                "seen_payment_nonces": sorted(self.seen_payment_nonces),
+                "counts": self.counts,
+            })
+        except OSError as exc:
+            print(f"rta: состояние не сохранено: {exc}")
 
     # ---------------------------------------------------------- маршруты
 
@@ -67,10 +111,8 @@ class App:
             "mode": self.cfg.mode,
             "uptime_seconds": round(time.time() - self.started, 1),
             "predicates": len(PREDICATES),
-            "stateful": False,
-            "warning": "state is in memory: a restart wipes the issued "
-                       "nonce и счётчики. Не годится для продакшна без "
-                       "nonces permanently.",
+            "stateful": bool(self.cfg.state_dir),
+            "state_dir": self.cfg.state_dir or None,
         }
 
     def predicates(self) -> tuple[int, dict]:
@@ -87,6 +129,7 @@ class App:
                                f"{', '.join(sorted(PREDICATES))}")
         nonce = self.nonces.issue()
         self.counts["nonce"] += 1
+        self.save_state()
         return 200, {"nonce": nonce, "predicate": predicate,
                      "ttl_seconds": self.nonces._ttl}
 
@@ -108,6 +151,7 @@ class App:
         status = self.nonces.status(nonce) if nonce else "unknown"
         if status != "issued":
             self.counts["rejected"] += 1
+            self.save_state()
             return 409, {"ok": False,
                          "error": f"nonce недействителен ({status}); каждое "
                                   f"the proof can be verified only once"}
@@ -121,10 +165,12 @@ class App:
         if ok:
             self.nonces.consume(nonce)
             self.counts["accepted"] += 1
+            self.save_state()
             return 200, {"ok": True, "predicate": predicate,
                          "verdict": why,
                          "disclosed": "nothing: the public signals are empty"}
         self.counts["rejected"] += 1
+        self.save_state()
         return 200, {"ok": False, "predicate": predicate, "verdict": why,
                      "disclosed": "verification failed; the secret is not disclosed"}
 
@@ -156,6 +202,10 @@ class App:
         не сможет предъявить, что оплатил.
         """
         status, payload = self.verify(body, resource_url)
+        # Потраченный nonce платежа появился в множестве внутри
+        # settle_payment — записываем немедленно: если сервис упадёт до
+        # следующего запроса, оплата снова станет предъявляемой.
+        self.save_state(force=True)
         payload["payment"] = {"settled": True,
                               "transaction": receipt.get("transaction"),
                               "network": receipt.get("network"),
