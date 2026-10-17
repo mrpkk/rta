@@ -509,11 +509,13 @@ def settle_payment(cfg: Config, header_value: str | None, *,
             "paymentPayload": body,
             "paymentRequirements": {
                 "scheme": "exact", "network": requirement.network,
-                # И amount, и maxAmountRequired обязательны. Без amount
-                # фасилитатор отвечает 500 "Cannot convert undefined to a
-                # BigInt" — проверено на Base Sepolia 09.10.2026.
+                # Только amount. Прежняя редакция слала и maxAmountRequired
+                # («без amount фасилитатор отвечает 500»); с него фасилитатор
+                # PayAI классифицирует требования как v1 и отвергает:
+                # invalid_payment_requirements «x402Version 2 requires V2
+                # payment requirements ('amount'); got V1 ('maxAmountRequired')».
+                # Проверено вживую 17.10.2026 против facilitator.payai.network.
                 "amount": str(requirement.amount_atoms),
-                "maxAmountRequired": str(requirement.amount_atoms),
                 "resource": requirement.resource,
                 "description": "Zk proof verification",
                 "mimeType": "application/json",
