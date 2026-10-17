@@ -33,10 +33,10 @@ const LOG = "ceremony-log.json";
 const POWER = 12;
 
 function snark(args, input) {
-    // snarkjs 0.7.6 у contribute/convert НЕ принимает -e: энтропия
-    // запрашивается интерактивно. Проверено: с флагом — usage и отказ.
-    // Поэтому энтропия подаётся на stdin, тремя строками, как просит
-    // инструмент.
+    // Опции -e|--entropy и -n|--name у contribute есть и работают
+    // (перепроверено 17.10.2026: команда принимает их и после позиционных
+    // аргументов — падает только на отсутствующем файле). Энтропию всё же
+    // подаём на stdin: этот путь уже проверен на живой церемонии.
     return execFileSync("npx", ["snarkjs", ...args], {
         encoding: "utf8",
         maxBuffer: 1 << 26,
@@ -74,6 +74,9 @@ function independentEntropy() {
     return {
         note: "два источника: os.randombytes(32) + собственный вклад. "
             + "ОДИН оператор — этого НЕДОСТАТОЧНО для доверенной церемонии.",
+        // В журнал уходит только отпечаток: сам сид — материал энтропии,
+        // и файлу, который может быть показан покупателю, его знать не нужно.
+        seed_sha256: createHash("sha256").update(os32 + ours).digest("hex"),
         seed: os32,
         operator_contribution: ours,
     };
@@ -102,12 +105,15 @@ switch (cmd) {
             process.exit(2);
         }
         const ent = independentEntropy();
-        // энтропию инструмент спрашивает сам — подаём её на stdin
-        const entInput = [ent.seed, ent.seed, ent.seed].join("\n") + "\n";
+        // snarkjs спрашивает РОВНО одну строку (readline.question),
+        // поэтому обе составляющие склеиваем в одну: иначе вторую он
+        // просто не прочитал бы, и «два источника» были бы неправдой.
+        const entInput = ent.seed + ent.operator_contribution + "\n";
         snark(["powersoftau", "contribute", inp, out], entInput);
         const log = readLog();
         record(log, "contribute", { input: inp, output: out, name,
-                                    sha256: sha256(out), ...ent });
+                                    sha256: sha256(out),
+                                    note: ent.note, seed_sha256: ent.seed_sha256 });
         writeLog(log);
         console.log(`  вклад «${name}» добавлен. Количество вкладов: `
                   + `${log.steps.filter(s => s.step === "contribute").length}`);
@@ -137,7 +143,7 @@ switch (cmd) {
         } catch {
             beaconHash = "unsupported-in-snarkjs-0.7.6";
         }
-        const entInput = [ent.seed, ent.seed, ent.seed].join("\n") + "\n";
+        const entInput = ent.seed + ent.operator_contribution + "\n";
         snark(["powersoftau", "convert", inp, out], entInput);
         const log = readLog();
         record(log, "burn", {
@@ -147,7 +153,7 @@ switch (cmd) {
             warning: "выход burn-фазы содержит toxic waste и обязан быть "
                    + "уничтожен. В этом проекте он остаётся на диске — "
                    + "значит церемония не доверенная.",
-            ...ent,
+            note: ent.note, seed_sha256: ent.seed_sha256,
         });
         writeLog(log);
         console.log("  ⚠ burn выполнен. Выход содержит toxic waste и обязан "
