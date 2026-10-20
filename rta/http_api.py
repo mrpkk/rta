@@ -40,6 +40,10 @@ if _ATTEST not in sys.path:
 
 VERSION = "0.1.0"
 MAX_BODY_BYTES = 256 * 1024
+# Ключ IndexNow: публикуется файлом /<ключ>.txt на хосте — это и есть
+# доказательство владения. Секретом не является; тот же ключ уже отдаёт
+# attest.rta.lat, здесь он нужен для корня rta.lat.
+_INDEXNOW_KEY = "79b5d8b3abc6edc97859cc7c3f6d85de"
 
 
 class App:
@@ -391,6 +395,11 @@ class Handler(BaseHTTPRequestHandler):
                 "claim": "glama_claim_N9Ld3qGF9Tz7UfnYjR18x4BvXzaTk66",
             }).encode("utf-8")
             return _send_raw(self, body, "application/json; charset=utf-8")
+        if path == f"/{_INDEXNOW_KEY}.txt":
+            # Доказательство владения хостом для IndexNow (Bing, Яндекс):
+            # без этого файла поисковики не принимают заявку на обход.
+            return _send_raw(self, _INDEXNOW_KEY.encode("utf-8"),
+                             "text/plain; charset=utf-8")
         if path in ("/", ""):
             # Витрина. Машинное описание переехало на /api: корень домена
             # — первое, что видит покупатель, и список маршрутов ему ничего

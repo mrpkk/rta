@@ -655,3 +655,12 @@ def test_glama_claim_file_is_served(server):
         body = json.loads(r.read())
     assert body["claim"].startswith("glama_claim_")
     assert body["$schema"].startswith("https://glama.ai/")
+
+
+def test_indexnow_key_file_is_served(server):
+    """Ключ IndexNow в корне rta.lat: без файла Яндекс и Bing не примут URL."""
+    base, _ = server
+    with urllib.request.urlopen(f"{base}/79b5d8b3abc6edc97859cc7c3f6d85de.txt",
+                                timeout=10) as r:
+        assert r.status == 200
+        assert "text/plain" in r.headers.get("Content-Type", "")
