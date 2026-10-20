@@ -186,3 +186,16 @@ npm-пакет `circom@0.5.46` непригоден: его парсер тер�
 Последняя картинка сделана намеренно. Продукт о доверии, который прячет
 свои ограничения, перестаёт быть доверенным: достаточно одного покупателя,
 которому продали обещание без оговорок, чтобы репутация была потеряна.
+
+## Call it from your agent
+
+ṚTA has no MCP endpoint yet — it is an HTTP service with x402 payments per call:
+
+```bash
+curl -X POST https://rta.lat/v1/verify \
+  -H 'Content-Type: application/json' \
+  -d '{"circuit": "balance_threshold", "public_inputs": {"balance": "1200"}, "threshold": "1000"}'
+```
+
+The verifier learns that the threshold is met and never learns the balance.
+An MCP wrapper is the next step (tracked in PROGRESS).
