@@ -639,3 +639,19 @@ class TestPaymentReceiptAndReplay:
         _run(self._app(), body)
         assert seen_arg.get("value") is not None, \
             "seen_nonces не передаётся: повтор оплаты уйдёт в сеть"
+
+
+def test_glama_claim_file_is_served(server):
+    """Верификация домена для Glama: файл обязан быть валидным JSON по HTTPS.
+
+    Glama проверяет https://rta.lat/.well-known/glama.json и снимает
+    подтверждённое владение, если файл пропал.
+    """
+    base, _ = server
+    with urllib.request.urlopen(f"{base}/.well-known/glama.json",
+                                timeout=10) as r:
+        assert r.status == 200
+        assert "application/json" in r.headers.get("Content-Type", "")
+        body = json.loads(r.read())
+    assert body["claim"].startswith("glama_claim_")
+    assert body["$schema"].startswith("https://glama.ai/")

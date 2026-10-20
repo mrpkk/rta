@@ -382,6 +382,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/sitemap.xml":
             return _send_raw(self, _sitemap().encode("utf-8"),
                               "application/xml; charset=utf-8")
+        if path == "/.well-known/glama.json":
+            # Верификация владения доменом для Glama: один файл покрывает все
+            # коннекторы под rta.lat. Токен не секрет и должен жить постоянно —
+            # при его удалении Glama снимает подтверждённое владение.
+            body = json.dumps({
+                "$schema": "https://glama.ai/mcp/schemas/connector.json",
+                "claim": "glama_claim_N9Ld3qGF9Tz7UfnYjR18x4BvXzaTk66",
+            }).encode("utf-8")
+            return _send_raw(self, body, "application/json; charset=utf-8")
         if path in ("/", ""):
             # Витрина. Машинное описание переехало на /api: корень домена
             # — первое, что видит покупатель, и список маршрутов ему ничего
