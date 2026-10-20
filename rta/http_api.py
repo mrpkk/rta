@@ -392,7 +392,7 @@ class Handler(BaseHTTPRequestHandler):
             # при его удалении Glama снимает подтверждённое владение.
             body = json.dumps({
                 "$schema": "https://glama.ai/mcp/schemas/connector.json",
-                "claim": "glama_claim_N9Ld3qGF9Tz7UfnYjR18x4BvXzaTk66",
+                "claim": "glama_claim_N9Ld3qGF9Tz7UfnYjR18x4BvXzaTk664",
             }).encode("utf-8")
             return _send_raw(self, body, "application/json; charset=utf-8")
         if path == f"/{_INDEXNOW_KEY}.txt":
