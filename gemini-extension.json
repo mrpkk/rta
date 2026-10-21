@@ -1,0 +1,10 @@
+{
+  "name": "rta",
+  "version": "0.1.0",
+  "description": "Zero-knowledge proof of a threshold: the verifier learns the threshold is met and never learns the value.",
+  "mcpServers": {
+    "rta": {
+      "httpUrl": "https://rta.lat/mcp"
+    }
+  }
+}
