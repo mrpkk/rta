@@ -421,6 +421,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/sitemap.xml":
             return _send_raw(self, _sitemap().encode("utf-8"),
                               "application/xml; charset=utf-8")
+        if path == "/.well-known/mcp-registry-auth":
+            # HTTP-аутентификация официального MCP Registry: файл с
+            # публичным ключом, которым подписаны метаданные сервера.
+            # Приватный ключ живёт вне репозитория
+            # (~/.local/share/mcp-registry/key.pem), здесь он не нужен.
+            auth = (Path(__file__).resolve().parent.parent
+                    / "mcp-registry-auth")
+            if auth.is_file():
+                return _send_raw(self, auth.read_bytes(),
+                                 "text/plain; charset=utf-8")
+            return _send_raw(self, b"", "text/plain; charset=utf-8")
         if path == "/.well-known/glama.json":
             # Верификация владения доменом для Glama: один файл покрывает все
             # коннекторы под rta.lat. Токен не секрет и должен жить постоянно —

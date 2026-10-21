@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "lat.rta/rta",
+  "title": "rta — zero-knowledge proof of a threshold",
+  "description": "Prove a hidden value reached a threshold without revealing the value.",
+  "repository": {
+    "url": "https://github.com/mrpkk/rta",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://rta.lat/mcp"
+    }
+  ]
+}
