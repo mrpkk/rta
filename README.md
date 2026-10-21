@@ -199,3 +199,29 @@ curl -X POST https://rta.lat/v1/verify \
 
 The verifier learns that the threshold is met and never learns the balance.
 An MCP wrapper is the next step (tracked in PROGRESS).
+
+## MCP server (Model Context Protocol)
+
+ṚTA is an **MCP server**: it speaks the Model Context Protocol over Streamable
+HTTP (JSON-RPC 2.0) and exposes threshold proofs as MCP tools.
+
+- **MCP tools**:
+  - `list_predicates` — which thresholds can be proven (free, no payment);
+  - `verify_proof` — verify a Groth16 proof that a hidden value reached a
+    threshold; paid per call over x402, like the HTTP endpoint.
+- **MCP resources / prompts**: none exposed yet — `resources/list` and
+  `prompts/list` answer with empty lists rather than an error, so directory
+  scanners do not mark the server as broken.
+- **Transport**: Streamable HTTP at `https://rta.lat/mcp`. The verifier learns
+  the threshold is met and never learns the value.
+
+### Connect an MCP client
+
+```json
+{
+  "mcpServers": {
+    "rta": { "url": "https://rta.lat/mcp" }
+  }
+}
+```
+

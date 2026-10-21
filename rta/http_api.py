@@ -425,7 +425,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {
                 "service": "ṚTA — zero-knowledge proof of a threshold",
                 "endpoints": ["/healthz", "/v1/predicates",
-                              "POST /v1/nonce", "POST /v1/verify"],
+                              "POST /v1/nonce", "POST /v1/verify",
+                              "POST /mcp (MCP server)"],
                 "mode": self.app.cfg.mode,
                 "network": self.app.cfg.network,
             })
@@ -444,10 +445,12 @@ class Handler(BaseHTTPRequestHandler):
                              "remaining_per_minute":
                                  self.app.limiter.remaining()})
             return
+        # MCP читает тело сам: там важен сырой байтовый JSON-RPC, а
+        # _read_json() уже съел бы его. Поэтому ветка выше разбора.
+        if path == "/mcp":
+            return self._handle_mcp()
         try:
             body = self._read_json()
-            if path == "/mcp":
-                return self._handle_mcp()
             if path == "/v1/nonce":
                 self._send(*self.app.issue_nonce(body))
             elif path == "/v1/verify":
