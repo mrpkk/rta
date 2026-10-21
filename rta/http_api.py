@@ -446,6 +446,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             body = self._read_json()
+            if path == "/mcp":
+                return self._handle_mcp()
             if path == "/v1/nonce":
                 self._send(*self.app.issue_nonce(body))
             elif path == "/v1/verify":
@@ -498,6 +500,80 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:              # noqa: BLE001
             self._send(500, {"ok": False,
                              "error": f"внутренняя ошибка: {type(exc).__name__}"})
+
+
+    def _handle_mcp(self) -> None:
+        """MCP-эндпоинт: каталоги агентов принимают только MCP.
+
+        Оплата устроена как у /v1/verify, но решение «платный ли вызов»
+        принимается ПОСЛЕ разбора запроса: у сервиса два инструмента, и
+        список предикатов должен остаться бесплатным. Поэтому метод
+        читается здесь, а не по «любой tools/call».
+        """
+        from . import mcp as mcp_module
+
+        if not self.app.limiter.allow():
+            self._send(429, {"ok": False,
+                             "error": "превышен лимит частоты",
+                             "remaining_per_minute":
+                                 self.app.limiter.remaining()})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._send(400, {"ok": False,
+                             "error": "Content-Length is not a number"})
+            return
+        if length <= 0 or length > MAX_BODY_BYTES:
+            self._send(400, {"ok": False,
+                             "error": f"body must be 1..{MAX_BODY_BYTES} bytes"})
+            return
+        raw = self.rfile.read(length)
+
+        tool_name = None
+        try:
+            message = json.loads(raw or b"{}")
+            if isinstance(message, dict):
+                params = message.get("params") or {}
+                if isinstance(params, dict):
+                    tool_name = params.get("name")
+        except ValueError:
+            message = {}
+
+        receipt = None
+        if tool_name in mcp_module.PAID_TOOLS and self.app.cfg.mode == "x402":
+            header = (self.headers.get("PAYMENT-SIGNATURE")
+                      or self.headers.get("X-PAYMENT")
+                      or self.headers.get("X-Payment"))
+            if not header:
+                self._send(*self.app.payment_required(self._resource_url()))
+                return
+            try:
+                receipt = settle_payment(
+                    self.app.cfg, header,
+                    attestation_sys_path=_ATTEST,
+                    seen_nonces=self.app.seen_payment_nonces)
+            except ServiceError as exc:
+                self._send(402, {"ok": False, "error": str(exc), "paid": False})
+                return
+
+        def verify_fn(body: dict):
+            if receipt is not None:
+                return self.app.verify_paid(body, self._resource_url(), receipt)
+            return self.app.verify(body, self._resource_url())
+
+        answer = mcp_module.respond(raw, verify_fn, self.app.predicates)
+        if answer is None:
+            self.send_response(202)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        status, body = answer
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 def create_server(app: App | None = None, host: str = "127.0.0.1",
