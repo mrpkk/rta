@@ -170,6 +170,16 @@ Replaying the same nonce is rejected: one payment, one verification.</p>
 <tr><td><code>GET /api</code></td><td>machine-readable service description</td></tr>
 </table>
 
+<h2>For agents</h2>
+<div class="card ok">
+<p><b><a href="/hub" style="color:var(--ok)">Soma hub</a></b> — one MCP endpoint that gives an
+agent long memory, signed obligations and offline proofs. Facts outlive the session; work is
+promised, claimed and closed with a receipt anyone can check.
+<a href="/hub" style="color:var(--accent)">Open the hub</a> ·
+<a href="/hub/status" style="color:var(--accent)">live status</a> ·
+<a href="/hub/demo/recall?q=soma%20cost" style="color:var(--accent)">try memory without a token</a>.</p>
+</div>
+
 <h2>Limitations, stated plainly</h2>
 <ul class="muted">
 <li>State is on disk since 17.10.2026: issued and spent tokens survive a restart. Counters too.</li>
