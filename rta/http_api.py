@@ -421,6 +421,21 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/sitemap.xml":
             return _send_raw(self, _sitemap().encode("utf-8"),
                               "application/xml; charset=utf-8")
+        if path == "/.well-known/mcp/server-card.json":
+            # Статическая карточка для каталогов, где скан живого /mcp не
+            # проходит. Собирается из того же списка инструментов, что и
+            # tools/list, — расхождение с листингом невозможно.
+            from .mcp import tools as _mcp_tools
+            card = {
+                "serverInfo": {"name": "rta", "version": VERSION},
+                "authentication": {"required": False, "schemes": []},
+                "tools": [{"name": x["name"], "description": x["description"],
+                           "inputSchema": x.get("inputSchema", {})}
+                          for x in _mcp_tools()],
+                "resources": [],
+                "prompts": [],
+            }
+            self._send(200, card)
         if path == "/.well-known/mcp-registry-auth":
             # HTTP-аутентификация официального MCP Registry: файл с
             # публичным ключом, которым подписаны метаданные сервера.
