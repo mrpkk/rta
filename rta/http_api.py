@@ -447,6 +447,12 @@ class Handler(BaseHTTPRequestHandler):
                 return _send_raw(self, auth.read_bytes(),
                                  "text/plain; charset=utf-8")
             return _send_raw(self, b"", "text/plain; charset=utf-8")
+        if path == "/.well-known/businessmcp-verify.txt":
+            # Подтверждение владения доменом для каталога businessMCP.
+            # Они принимают либо TXT-запись _businessmcp.rta.lat, либо этот
+            # файл с тем же значением. Файл дешевле: DNS-зона не меняется.
+            return _send_raw(self, b"WtZwdiqB-M8jNifJ308t3h9i",
+                             "text/plain; charset=utf-8")
         if path == "/.well-known/glama.json":
             # Верификация владения доменом для Glama: один файл покрывает все
             # коннекторы под rta.lat. Токен не секрет и должен жить постоянно —

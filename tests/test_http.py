@@ -657,6 +657,20 @@ def test_glama_claim_file_is_served(server):
     assert body["$schema"].startswith("https://glama.ai/")
 
 
+def test_businessmcp_verify_file_is_served(server):
+    """Верификация домена для businessMCP: файл с токеном вместо TXT-записи.
+
+    Каталог принимает либо TXT `_businessmcp.rta.lat`, либо этот файл.
+    Файл выбран, чтобы не трогать DNS-зону.
+    """
+    base, _ = server
+    with urllib.request.urlopen(f"{base}/.well-known/businessmcp-verify.txt",
+                                timeout=10) as r:
+        assert r.status == 200
+        assert "text/plain" in r.headers.get("Content-Type", "")
+        assert r.read().strip() == b"WtZwdiqB-M8jNifJ308t3h9i"
+
+
 def test_indexnow_key_file_is_served(server):
     """Ключ IndexNow в корне rta.lat: без файла Яндекс и Bing не примут URL."""
     base, _ = server
