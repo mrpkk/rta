@@ -297,6 +297,48 @@ def _robots() -> str:
             f"Sitemap: {_base_url()}/sitemap.xml\n")
 
 
+def _llms_txt() -> str:
+    """llms.txt: короткая карта для AI-краулеров (GEO).
+
+    В 2026 около половины цитат в ответах ChatGPT берётся из первых 30 %
+    страницы, поэтому карта начинается с одного предложения о продукте,
+    а не с истории компании.
+    """
+    return """# ṚTA / Soma
+
+> ṚTA proves that a condition holds without revealing the value behind it.
+> Soma is the open (MIT) protocol and hosted node that give AI agents long memory,
+> signed obligations and offline proofs through one MCP endpoint.
+
+## Products
+
+- [Soma hub](https://rta.lat/hub): memory, obligations and proofs for agents. Public status, no token: https://rta.lat/hub/status
+- [Soma memory demo](https://rta.lat/hub/demo/recall?q=soma%20cost): ask a question, the node searches its own memory.
+- [ṚTA proofs](https://rta.lat/): prove a condition without revealing the value (x402, USDC, no account).
+- [Attest](https://attest.rta.lat/mcp): signed verdicts on AI artifacts before you accept or pay for them.
+- [Drift](https://drift.rta.lat/mcp): mandate enforcement for agents (limits, payees, kill-switch).
+
+## Protocol
+
+- Source: https://github.com/mrpkk/soma-protocol (MIT)
+- MCP registry: io.github.mrpkk/soma-protocol (v1.2.0)
+- Tools: soma_remember, soma_recall, soma_reflect, soma_send, soma_inbox, soma_claim,
+  soma_complete, soma_route, soma_verify, soma_cold_put, soma_cold_get, soma_stats, soma_export
+
+## Pricing
+
+- Public status and memory demo: free, no account.
+- One environment: $49/month. One envelope over x402: $0.005 USDC.
+- Free tier: 20 verification calls per day.
+
+## Facts
+
+- Soma does not store prompts, model output, files or IP addresses.
+- Every envelope is signed with Ed25519; verification works offline.
+- Full export: every fact and envelope as one JSON (right to leave).
+"""
+
+
 def _sitemap() -> str:
     """Карта сайта: документы, а не endpoints.
 
@@ -418,6 +460,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/robots.txt":
             return _send_raw(self, _robots().encode("utf-8"),
                               "text/plain; charset=utf-8")
+        if path == "/llms.txt":
+            return _send_raw(self, _llms_txt().encode("utf-8"),
+                             "text/plain; charset=utf-8")
         if path == "/sitemap.xml":
             return _send_raw(self, _sitemap().encode("utf-8"),
                               "application/xml; charset=utf-8")
@@ -451,7 +496,10 @@ class Handler(BaseHTTPRequestHandler):
             # Подтверждение владения доменом для каталога businessMCP.
             # Они принимают либо TXT-запись _businessmcp.rta.lat, либо этот
             # файл с тем же значением. Файл дешевле: DNS-зона не меняется.
-            return _send_raw(self, b"WtZwdiqB-M8jNifJ308t3h9i",
+            # Токен может меняться по серверу/сессии в каталоге — env override.
+            token = os.environ.get("BUSINESSMCP_VERIFY_TOKEN",
+                                   "dC5JNgohkfsfDMHrA5D_mNpY")
+            return _send_raw(self, token.encode("utf-8"),
                              "text/plain; charset=utf-8")
         if path == "/.well-known/glama.json":
             # Верификация владения доменом для Glama: один файл покрывает все

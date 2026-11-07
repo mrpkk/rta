@@ -668,7 +668,7 @@ def test_businessmcp_verify_file_is_served(server):
                                 timeout=10) as r:
         assert r.status == 200
         assert "text/plain" in r.headers.get("Content-Type", "")
-        assert r.read().strip() == b"WtZwdiqB-M8jNifJ308t3h9i"
+        assert r.read().strip() == b"dC5JNgohkfsfDMHrA5D_mNpY"
 
 
 def test_indexnow_key_file_is_served(server):
