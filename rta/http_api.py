@@ -346,8 +346,14 @@ def _sitemap() -> str:
     бессмысленна.
     """
     base = _base_url()
-    urls = "".join(
-        f"<url><loc>{base}{page}</loc></url>" for page in ("", "/health"))
+    # Все платные витрины домена. До 20.11.2026 в карте были только "/" и "/health" —
+    # то есть поисковики не знали о существовании офферов, и трафик на них мог
+    # прийти только по прямой ссылке.
+    pages = ("", "/health",
+             "/drift-offer/", "/karta-report/", "/data-rescue/", "/data-rescue-kit/",
+             "/pdf-to-excel/", "/wordpress-fix/", "/aibiz-review/", "/root-check/",
+             "/crypto-mcp/")
+    urls = "".join(f"<url><loc>{base}{page}</loc></url>" for page in pages)
     return ('<?xml version="1.0" encoding="UTF-8"?>'
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
             f"{urls}</urlset>")
