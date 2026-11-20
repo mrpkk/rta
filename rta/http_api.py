@@ -289,6 +289,33 @@ def _base_url() -> str:
     return os.environ.get("RTA_BASE_URL", "https://rta.lat").rstrip("/")
 
 
+
+INTENTS_PATH = Path(os.environ.get("RTA_INTENTS_PATH") or
+                    (Path.home() / ".local" / "share" / "rta" / "intents.json"))
+
+
+def _intents_read() -> dict:
+    try:
+        data = json.loads(INTENTS_PATH.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _intent_add(offer: str) -> dict:
+    """Счётчик нажатий по офферу. Только числа — кто нажал, не пишем."""
+    data = _intents_read()
+    key = "".join(ch for ch in offer if ch.isalnum() or ch in "-_")[:40] or "unknown"
+    data[key] = int(data.get(key, 0)) + 1
+    data["_total"] = sum(v for k, v in data.items() if not k.startswith("_"))
+    try:
+        INTENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        INTENTS_PATH.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True))
+    except OSError:
+        pass
+    return data
+
+
 # Витрины, живущие на других хостах. Одна таблица — чтобы ссылка, которую мы
 # даём покупателю, не могла вести в пустоту (так было с /pricing до 21.11.2026).
 _MOVED = {"/pricing": "https://ailegal.legal/pricing",
@@ -495,6 +522,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return
+        if path == "/intents":
+            data = _intents_read()
+            return self._send(200, {"offers": {k: v for k, v in data.items()
+                                               if not k.startswith("_")},
+                                    "total": int(data.get("_total", 0))})
         if path == "/robots.txt":
             return _send_raw(self, _robots().encode("utf-8"),
                               "text/plain; charset=utf-8")
@@ -594,6 +626,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"ok": False, "error": f"no route for {path}"})
 
     def do_POST(self) -> None:               # noqa: N802
+        path = self.path.split("?")[0].rstrip("/") or "/"
+        if path == "/intent":
+            from urllib.parse import parse_qs
+            q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            offer = (q.get("offer") or ["unknown"])[0]
+            _intent_add(offer)
+            self.send_response(204)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         path = self.path.split("?")[0].rstrip("/")
         if not self.app.limiter.allow():
             self._send(429, {"ok": False,

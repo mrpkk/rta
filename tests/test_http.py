@@ -690,3 +690,18 @@ def test_offer_links_redirect_instead_of_404():
     assert _MOVED["/pricing"].endswith("/pricing")
     assert _MOVED["/plans"].startswith("https://")
     assert _MOVED["/app"].startswith("https://")
+
+
+def test_intent_counter_is_per_offer(tmp_path, monkeypatch):
+    """Счётчик нажатий по офферу: без него «0 продаж» неотличимо от «не видели кнопки»."""
+    import rta.http_api as api
+
+    monkeypatch.setattr(api, "INTENTS_PATH", tmp_path / "intents.json")
+    api._intent_add("karta-report")
+    api._intent_add("karta-report")
+    api._intent_add("drift-offer/../..")     # мусор в параметре не должен ломать файл
+
+    data = api._intents_read()
+    assert data["karta-report"] == 2
+    assert data["_total"] == 3
+    assert all(not k.startswith("/") for k in data)
