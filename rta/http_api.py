@@ -324,6 +324,8 @@ def _llms_txt() -> str:
   into your agent, with a signed refusal receipt. **$79, 48 hours.** Card or USDC on Base.
 - [KARTA report](https://rta.lat/karta-report/): written scan of the money-moving MCP servers —
   which can spend without a ceiling and what to fix first. **$19, instant PDF + JSON.**
+- [Crypto MCP](https://rta.lat/crypto-mcp/): prices, pools, on-chain balances and DeFi positions for
+  agents and scripts. **$19 for 30 days, key by email, no auto-renewal.**
 - [Agent spend audit](https://attest.rta.lat/plans): one month of logs, a written report where every
   finding is tied to a row and a rule. **$199, five working days; nothing found — no fee.**
 - [Free first step](https://attest.rta.lat/free-scan): send one CSV of agent spend, a human replies in
