@@ -678,3 +678,15 @@ def test_indexnow_key_file_is_served(server):
                                 timeout=10) as r:
         assert r.status == 200
         assert "text/plain" in r.headers.get("Content-Type", "")
+
+
+def test_offer_links_redirect_instead_of_404():
+    """Ссылки, которые мы сами даём покупателю, обязаны открываться.
+
+    21.11.2026: `https://rta.lat/pricing` отдавал 404 — витрина цен жила на
+    другом хосте, а ссылка вела в пустоту.
+    """
+    from rta.http_api import _MOVED
+    assert _MOVED["/pricing"].endswith("/pricing")
+    assert _MOVED["/plans"].startswith("https://")
+    assert _MOVED["/app"].startswith("https://")

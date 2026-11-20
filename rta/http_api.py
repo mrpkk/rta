@@ -289,6 +289,13 @@ def _base_url() -> str:
     return os.environ.get("RTA_BASE_URL", "https://rta.lat").rstrip("/")
 
 
+# Витрины, живущие на других хостах. Одна таблица — чтобы ссылка, которую мы
+# даём покупателю, не могла вести в пустоту (так было с /pricing до 21.11.2026).
+_MOVED = {"/pricing": "https://ailegal.legal/pricing",
+          "/plans": "https://attest.rta.lat/plans",
+          "/app": "https://ailegal.legal/app"}
+
+
 def _robots() -> str:
     """Краулеров пускаем: индексация витрины — это трафик."""
     return ("User-agent: *\n"
@@ -480,6 +487,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:                # noqa: N802
         path = self.path.split("?")[0].rstrip("/") or "/"
+        # Витрины, которые живут на другом хосте. Раньше /pricing отдавал 404 —
+        # то есть ссылку, которую мы сами давали покупателю, открыть было нельзя.
+        if path in _MOVED:
+            self.send_response(302)
+            self.send_header("Location", _MOVED[path])
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         if path == "/robots.txt":
             return _send_raw(self, _robots().encode("utf-8"),
                               "text/plain; charset=utf-8")
