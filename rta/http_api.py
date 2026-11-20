@@ -324,6 +324,8 @@ def _llms_txt() -> str:
   into your agent, with a signed refusal receipt. **$79, 48 hours.** Card or USDC on Base.
 - [KARTA report](https://rta.lat/karta-report/): written scan of the money-moving MCP servers —
   which can spend without a ceiling and what to fix first. **$19, instant PDF + JSON.**
+- [AIBiz review](https://rta.lat/aibiz-review/): one business model reviewed against 69 live cards —
+  unit economics, risks, first three steps to revenue. **$49, three working days.**
 - [Crypto MCP](https://rta.lat/crypto-mcp/): prices, pools, on-chain balances and DeFi positions for
   agents and scripts. **$19 for 30 days, key by email, no auto-renewal.**
 - [Agent spend audit](https://attest.rta.lat/plans): one month of logs, a written report where every
