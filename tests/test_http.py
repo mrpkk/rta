@@ -723,3 +723,16 @@ def test_views_and_clicks_are_separate(tmp_path, monkeypatch):
     data = api._intents_read()
     assert data["view:karta-report"] == 2
     assert data["karta-report"] == 1
+
+
+def test_sitemap_lists_the_bot_landing():
+    """Страница-визитка бота должна быть в карте сайта: иначе трафик только по ссылке.
+
+    21.11.2026: у @rigvedaguru_bot было 0 входов; страница появилась — и обязана
+    индексироваться, иначе канал снова «только для тех, кто уже знает».
+    """
+    import rta.http_api as api
+
+    xml = api._sitemap()
+    assert "/rigveda/" in xml
+    assert "<url><loc>" in xml

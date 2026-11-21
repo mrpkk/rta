@@ -422,7 +422,7 @@ def _sitemap() -> str:
     pages = ("", "/health",
              "/drift-offer/", "/karta-report/", "/data-rescue/", "/data-rescue-kit/",
              "/pdf-to-excel/", "/wordpress-fix/", "/aibiz-review/", "/root-check/",
-             "/crypto-mcp/")
+             "/crypto-mcp/", "/rigveda/")
     urls = "".join(f"<url><loc>{base}{page}</loc></url>" for page in pages)
     return ('<?xml version="1.0" encoding="UTF-8"?>'
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
