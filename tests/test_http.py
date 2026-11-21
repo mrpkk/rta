@@ -705,3 +705,21 @@ def test_intent_counter_is_per_offer(tmp_path, monkeypatch):
     assert data["karta-report"] == 2
     assert data["_total"] == 3
     assert all(not k.startswith("/") for k in data)
+
+
+def test_views_and_clicks_are_separate(tmp_path, monkeypatch):
+    """У клика обязан быть знаменатель: просмотр и нажатие считаются раздельно.
+
+    21.11.2026: витрины отдаёт статический сервер, поэтому просмотр сообщает сама
+    страница маячком kind=view. Без этого «0 покупок» не с чем сравнить.
+    """
+    import rta.http_api as api
+
+    monkeypatch.setattr(api, "INTENTS_PATH", tmp_path / "intents.json")
+    api._view_add("karta-report")
+    api._view_add("karta-report")
+    api._intent_add("karta-report")
+
+    data = api._intents_read()
+    assert data["view:karta-report"] == 2
+    assert data["karta-report"] == 1

@@ -302,6 +302,19 @@ def _intents_read() -> dict:
         return {}
 
 
+def _view_add(offer: str) -> dict:
+    """Счётчик просмотров витрины: без него клик не с чем сравнить."""
+    data = _intents_read()
+    key = "view:" + ("".join(ch for ch in offer if ch.isalnum() or ch in "-_")[:40] or "unknown")
+    data[key] = int(data.get(key, 0)) + 1
+    try:
+        INTENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        INTENTS_PATH.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True))
+    except OSError:
+        pass
+    return data
+
+
 def _intent_add(offer: str) -> dict:
     """Счётчик нажатий по офферу. Только числа — кто нажал, не пишем."""
     data = _intents_read()
@@ -318,6 +331,12 @@ def _intent_add(offer: str) -> dict:
 
 # Витрины, живущие на других хостах. Одна таблица — чтобы ссылка, которую мы
 # даём покупателю, не могла вести в пустоту (так было с /pricing до 21.11.2026).
+# Витрины домена: по ним считаем и просмотры, и нажатия — иначе у нажатий нет
+# знаменателя и «0 покупок» не с чем сравнить.
+OFFER_PATHS = ("/drift-offer", "/karta-report", "/data-rescue", "/data-rescue-kit",
+               "/pdf-to-excel", "/wordpress-fix", "/aibiz-review", "/root-check",
+               "/crypto-mcp")
+
 _MOVED = {"/pricing": "https://ailegal.legal/pricing",
           "/plans": "https://attest.rta.lat/plans",
           "/app": "https://ailegal.legal/app"}
@@ -516,6 +535,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/") or "/"
         # Витрины, которые живут на другом хосте. Раньше /pricing отдавал 404 —
         # то есть ссылку, которую мы сами давали покупателю, открыть было нельзя.
+        if path in OFFER_PATHS:
+            _view_add(path.lstrip("/"))
         if path in _MOVED:
             self.send_response(302)
             self.send_header("Location", _MOVED[path])
@@ -524,9 +545,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/intents":
             data = _intents_read()
-            return self._send(200, {"offers": {k: v for k, v in data.items()
-                                               if not k.startswith("_")},
-                                    "total": int(data.get("_total", 0))})
+            views = {k[5:]: v for k, v in data.items() if k.startswith("view:")}
+            clicks = {k: v for k, v in data.items()
+                      if not k.startswith(("_", "view:"))}
+            rows = {}
+            for offer in sorted(set(views) | set(clicks)):
+                v, c = int(views.get(offer, 0)), int(clicks.get(offer, 0))
+                rows[offer] = {"views": v, "clicks": c,
+                               "click_rate": (f"{c / v:.3f}" if v else "—")}
+            return self._send(200, {"offers": rows,
+                                    "total_views": sum(views.values()),
+                                    "total_clicks": sum(clicks.values())})
         if path == "/robots.txt":
             return _send_raw(self, _robots().encode("utf-8"),
                               "text/plain; charset=utf-8")
@@ -631,7 +660,10 @@ class Handler(BaseHTTPRequestHandler):
             from urllib.parse import parse_qs
             q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             offer = (q.get("offer") or ["unknown"])[0]
-            _intent_add(offer)
+            kind = (q.get("kind") or ["click"])[0]
+            # Витрины отдаёт статический сервер, поэтому просмотр сообщает сама
+            # страница этим же маячком (kind=view). Иначе у клика нет знаменателя.
+            _view_add(offer) if kind == "view" else _intent_add(offer)
             self.send_response(204)
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
